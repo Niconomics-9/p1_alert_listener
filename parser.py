@@ -56,7 +56,7 @@ def default_source_rules() -> dict[str, Any]:
         },
         "datto_rmm": {
             "enabled": True,
-            "trigger_priorities": ["critical", "high"],
+            "trigger_priorities": ["critical"],
             "trigger_severities": [],
             # Trigger on Datto alertTypeId 1003 (device offline) regardless of priority
             "trigger_offline_alerts": True,
