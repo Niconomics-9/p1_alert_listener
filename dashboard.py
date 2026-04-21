@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import tkinter as tk
-from tkinter import messagebox, scrolledtext, ttk
+from tkinter import messagebox, scrolledtext
 from typing import TYPE_CHECKING
 
 import config
@@ -27,8 +27,31 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("p1alert.dashboard")
 
-POLL_INTERVAL_MS = 150   # How often to drain the queue (ms)
-LOG_MAX_LINES = 500       # Cap log panel lines
+POLL_INTERVAL_MS = 150
+LOG_MAX_LINES    = 500
+
+# ── Design tokens ────────────────────────────────────────────────────────────
+FONT_UI    = ("Segoe UI", 10)
+FONT_UI_SB = ("Segoe UI Semibold", 10)
+FONT_TITLE = ("Segoe UI", 18, "bold")
+FONT_MONO  = ("Consolas", 10)
+FONT_MONO_SM = ("Consolas", 9)
+FONT_LABEL   = ("Segoe UI", 9)
+
+BG_SURFACE  = "#1E1E2E"   # base background
+BG_CARD     = "#242436"   # card background
+BG_DEEP     = "#11111B"   # top/bottom bars
+BG_INPUT    = "#313244"   # entry fields
+BG_TOOLBAR  = "#181825"   # toolbar strip
+
+BTN_PRIMARY  = "#4C9BE8"  # blue action
+BTN_DANGER   = "#F38BA8"  # red
+BTN_SUCCESS  = "#A6E3A1"  # green
+BTN_MUTED    = "#313244"  # neutral
+BTN_WARN     = "#F9E2AF"  # amber
+
+ACCENT_RED  = "#F38BA8"
+ACCENT_BLUE = "#89B4FA"
 
 
 class Dashboard:
@@ -39,6 +62,7 @@ class Dashboard:
         self.state = app_state
         self._alert_window: AlertWindow | None = None
         self._uptime_job: str | None = None
+        self._log_visible = True
 
         self._build_window()
         self._schedule_poll()
@@ -50,219 +74,212 @@ class Dashboard:
     def _build_window(self) -> None:
         r = self.root
         r.title(config.APP_TITLE)
-        r.configure(bg=config.DASH_BG)
-        r.geometry("1050x740")
-        r.minsize(820, 580)
+        r.configure(bg=BG_SURFACE)
+        r.geometry("1100x760")
+        r.minsize(900, 600)
         r.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_top_bar()
-        self._build_main_area()
+        self._build_toolbar()
+        self._build_cards_area()
+        self._build_log_drawer()
         self._build_status_bar()
 
     # ── Top bar ───────────────────────────────────────────────────────────────
 
     def _build_top_bar(self) -> None:
-        bar = tk.Frame(self.root, bg="#11111B", height=56)
+        bar = tk.Frame(self.root, bg=BG_DEEP, height=54)
         bar.pack(fill=tk.X)
         bar.pack_propagate(False)
 
-        title_frame = tk.Frame(bar, bg="#11111B")
-        title_frame.pack(side=tk.LEFT, padx=16, pady=8)
-        tk.Label(
-            title_frame, text="⚡ NetWatch",
-            font=("Arial Black", 18), fg=config.DASH_ACCENT, bg="#11111B",
-        ).pack(side=tk.LEFT)
-        tk.Label(
-            title_frame, text="  by Niconomics",
-            font=("Arial", 9), fg=config.DASH_LOG_FG, bg="#11111B",
-        ).pack(side=tk.LEFT, padx=(2, 0), pady=(8, 0))
+        # Brand
+        brand = tk.Frame(bar, bg=BG_DEEP)
+        brand.pack(side=tk.LEFT, padx=20, pady=0)
+        tk.Label(brand, text="⚡ NetWatch", font=FONT_TITLE,
+                 fg=ACCENT_BLUE, bg=BG_DEEP).pack(side=tk.LEFT)
 
-        # Uptime
-        self._uptime_lbl = tk.Label(
-            bar, text="Uptime: 00:00:00",
-            font=("Arial", 10), fg=config.DASH_FG, bg="#11111B",
-        )
-        self._uptime_lbl.pack(side=tk.RIGHT, padx=16)
+        # Right side
+        right = tk.Frame(bar, bg=BG_DEEP)
+        right.pack(side=tk.RIGHT, padx=16)
+
+        self._uptime_lbl = tk.Label(right, text="00:00:00",
+                                     font=("Segoe UI", 9), fg=config.COLOR_MUTED, bg=BG_DEEP)
+        self._uptime_lbl.pack(side=tk.RIGHT, padx=(12, 0))
+        tk.Label(right, text="Uptime", font=("Segoe UI", 8),
+                 fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.RIGHT)
 
         # Status pills
-        pill_frame = tk.Frame(bar, bg="#11111B")
-        pill_frame.pack(side=tk.RIGHT, padx=8)
+        pills = tk.Frame(bar, bg=BG_DEEP)
+        pills.pack(side=tk.RIGHT, padx=12)
 
-        self._pill_listener = _Pill(pill_frame, "Listener", "STOPPED", config.COLOR_ERR)
-        self._pill_listener.pack(side=tk.LEFT, padx=4)
+        self._pill_listener = _Pill(pills, "Listener", "STOPPED", config.COLOR_ERR)
+        self._pill_listener.pack(side=tk.LEFT, padx=3)
+        self._pill_sound = _Pill(pills, "Sound", "ON", config.COLOR_OK)
+        self._pill_sound.pack(side=tk.LEFT, padx=3)
+        self._pill_active = _Pill(pills, "Active", "0", config.COLOR_MUTED)
+        self._pill_active.pack(side=tk.LEFT, padx=3)
+        self._pill_queued = _Pill(pills, "Queued", "0", config.COLOR_MUTED)
+        self._pill_queued.pack(side=tk.LEFT, padx=3)
 
-        self._pill_sound = _Pill(pill_frame, "Sound", "ON", config.COLOR_OK)
-        self._pill_sound.pack(side=tk.LEFT, padx=4)
+    # ── Toolbar ───────────────────────────────────────────────────────────────
 
-        self._pill_active = _Pill(pill_frame, "Active", "0", config.COLOR_MUTED)
-        self._pill_active.pack(side=tk.LEFT, padx=4)
+    def _build_toolbar(self) -> None:
+        bar = tk.Frame(self.root, bg=BG_TOOLBAR, height=48)
+        bar.pack(fill=tk.X)
+        bar.pack_propagate(False)
 
-        self._pill_queued = _Pill(pill_frame, "Queued", "0", config.COLOR_MUTED)
-        self._pill_queued.pack(side=tk.LEFT, padx=4)
+        left = tk.Frame(bar, bg=BG_TOOLBAR)
+        left.pack(side=tk.LEFT, padx=12, pady=8)
 
-    # ── Main area ─────────────────────────────────────────────────────────────
+        # Primary actions
+        self._tb_btn(left, "↺  Restart",    self._do_restart_listener, BTN_MUTED)
+        self._tb_sep(left)
+        self._tb_btn(left, "🧪  Test Alert", self._do_test_alert,       BTN_PRIMARY)
+        self._tb_btn(left, "🖥  Open Alert", self._do_open_alert,        BTN_WARN,   fg="#11111B")
+        self._tb_btn(left, "🔇  Silence",    self._do_silence,           BTN_MUTED)
+        self._tb_btn(left, "✔  Acknowledge",self._do_acknowledge,        BTN_SUCCESS, fg="#11111B")
 
-    def _build_main_area(self) -> None:
-        main = tk.Frame(self.root, bg=config.DASH_BG)
-        main.pack(fill=tk.BOTH, expand=True, padx=8, pady=4)
+        right = tk.Frame(bar, bg=BG_TOOLBAR)
+        right.pack(side=tk.RIGHT, padx=12, pady=8)
 
-        # Left column: controls
-        left = tk.Frame(main, bg=config.DASH_BG, width=220)
-        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 6))
-        left.pack_propagate(False)
-        self._build_controls(left)
+        self._tb_btn(right, "⚙  Settings",  self._do_settings,    BTN_MUTED)
+        self._tb_btn(right, "🔊  Sound",     self._do_test_sound,  BTN_MUTED)
+        self._tb_btn(right, "📁  Logs",      self._do_open_logs,   BTN_MUTED)
+        self._tb_btn(right, "📋  Copy JSON", self._do_copy_json,   BTN_MUTED)
+        self._tb_btn(right, "🗑  Clear",     self._do_clear_history, "#442222", fg="#FFAAAA")
 
-        # Right column: panels
-        right = tk.Frame(main, bg=config.DASH_BG)
-        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        self._build_right_panels(right)
-
-    def _build_controls(self, parent: tk.Frame) -> None:
-        # Connection info
-        info = tk.LabelFrame(parent, text="Listener Info",
-                              bg=config.DASH_BG, fg=config.DASH_ACCENT,
-                              font=("Arial", 10, "bold"),
-                              relief=tk.FLAT, bd=1)
-        info.pack(fill=tk.X, pady=(0, 6))
-
-        self._info_lbl = tk.Label(
-            info, text=self._info_text(),
-            font=("Consolas", 9), fg=config.DASH_FG, bg=config.DASH_BG,
-            justify=tk.LEFT, anchor="w",
+    def _tb_btn(self, parent, label, cmd, bg, fg="white"):
+        btn = tk.Label(
+            parent, text=label, font=("Segoe UI", 9, "bold"),
+            fg=fg, bg=bg, padx=12, pady=4,
+            cursor="hand2", relief=tk.FLAT,
         )
-        self._info_lbl.pack(padx=8, pady=6, anchor="w")
+        btn.pack(side=tk.LEFT, padx=3)
+        btn.bind("<Button-1>", lambda e: cmd())
+        _hover(btn, bg, _lighten(bg))
 
-        # Button sections
-        self._make_btn_section(parent, "Listener",
-            [("▶  Start Listener", self._do_start_listener, config.COLOR_OK),
-             ("⏹  Stop Listener",  self._do_stop_listener,  config.COLOR_ERR)])
+    def _tb_sep(self, parent):
+        tk.Frame(parent, bg="#313244", width=1, height=28).pack(side=tk.LEFT, padx=6)
 
-        self._make_btn_section(parent, "Alert Actions",
-            [("🧪  Test Alert",          self._do_test_alert,     config.DASH_ACCENT),
-             ("🖥  Open Alert Screen",   self._do_open_alert,     "#FF8800"),
-             ("🔇  Silence Current",     self._do_silence,        "#AA6600"),
-             ("✔  Acknowledge Current", self._do_acknowledge,    "#006600")])
+    # ── Cards area ────────────────────────────────────────────────────────────
 
-        self._make_btn_section(parent, "History",
-            [("🗑  Clear History",       self._do_clear_history,  "#664444"),
-             ("📋  Copy Last Alert JSON",self._do_copy_json,      config.DASH_BTN_BG)])
+    def _build_cards_area(self) -> None:
+        area = tk.Frame(self.root, bg=BG_SURFACE)
+        area.pack(fill=tk.BOTH, expand=True, padx=12, pady=(10, 0))
 
-        self._make_btn_section(parent, "App",
-            [("⚙  Settings",            self._do_settings,       config.DASH_BTN_BG),
-             ("📁  Open Logs Folder",   self._do_open_logs,      config.DASH_BTN_BG),
-             ("🔊  Test Sound",         self._do_test_sound,     config.DASH_BTN_BG)])
+        # Top row: Active Alert + Queue side by side
+        top_row = tk.Frame(area, bg=BG_SURFACE)
+        top_row.pack(fill=tk.BOTH, expand=False)
 
-    def _make_btn_section(self, parent, title: str, buttons: list) -> None:
-        frame = tk.LabelFrame(parent, text=title,
-                               bg=config.DASH_BG, fg=config.DASH_FG,
-                               font=("Arial", 9), relief=tk.FLAT, bd=1)
-        frame.pack(fill=tk.X, pady=(0, 6))
-        for label, cmd, color in buttons:
-            tk.Button(
-                frame, text=label, command=cmd,
-                bg=color,
-                fg="white" if color != config.DASH_BTN_BG else config.DASH_FG,
-                font=("Arial", 10), relief=tk.FLAT, anchor="w",
-                padx=8, pady=4, cursor="hand2",
-                activebackground="#45475A",
-            ).pack(fill=tk.X, padx=4, pady=2)
+        self._build_active_card(top_row)
+        self._build_queue_card(top_row)
 
-    def _build_right_panels(self, parent: tk.Frame) -> None:
-        # Top: history + active/queued side by side
-        top = tk.Frame(parent, bg=config.DASH_BG)
-        top.pack(fill=tk.BOTH, expand=True)
+        # Bottom: History full width
+        self._build_history_card(area)
 
-        # Active alerts (left)
-        alert_frame = tk.LabelFrame(top, text="Active Alert",
-                                     bg=config.DASH_BG, fg=config.COLOR_ERR,
-                                     font=("Arial", 10, "bold"), relief=tk.FLAT)
-        alert_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 4))
+    def _build_active_card(self, parent) -> None:
+        outer = _Card(parent, "ACTIVE ALERT", accent=ACCENT_RED)
+        outer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6), pady=(0, 8))
 
         self._active_text = scrolledtext.ScrolledText(
-            alert_frame, bg=config.DASH_LOG_BG, fg=config.DASH_FG,
-            font=("Consolas", 10), relief=tk.FLAT, state=tk.DISABLED,
-            height=8, wrap=tk.WORD,
+            outer.body, bg=BG_SURFACE, fg=config.DASH_FG,
+            font=FONT_MONO, relief=tk.FLAT, state=tk.DISABLED,
+            height=9, wrap=tk.WORD, bd=0,
         )
-        self._active_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._active_text.pack(fill=tk.BOTH, expand=True)
+        self._active_card = outer
 
-        # Queued (right)
-        queue_frame = tk.LabelFrame(top, text="Queued Alerts",
-                                     bg=config.DASH_BG, fg=config.COLOR_WARN,
-                                     font=("Arial", 10, "bold"), relief=tk.FLAT)
-        queue_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(4, 0))
+    def _build_queue_card(self, parent) -> None:
+        outer = _Card(parent, "QUEUE", accent=BTN_WARN)
+        outer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0), pady=(0, 8))
 
         self._queued_list = tk.Listbox(
-            queue_frame, bg=config.DASH_LOG_BG, fg=config.DASH_FG,
-            font=("Consolas", 10), relief=tk.FLAT, selectbackground="#313244",
-            height=8,
+            outer.body, bg=BG_SURFACE, fg=config.DASH_FG,
+            font=FONT_MONO_SM, relief=tk.FLAT, selectbackground=BTN_MUTED,
+            height=9, bd=0, highlightthickness=0,
         )
-        self._queued_list.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._queued_list.pack(fill=tk.BOTH, expand=True)
 
-        # Middle: history
-        hist_frame = tk.LabelFrame(parent, text="Alert History (newest first)",
-                                    bg=config.DASH_BG, fg=config.DASH_FG,
-                                    font=("Arial", 10, "bold"), relief=tk.FLAT)
-        hist_frame.pack(fill=tk.BOTH, expand=True, pady=(6, 0))
+    def _build_history_card(self, parent) -> None:
+        outer = _Card(parent, "HISTORY", accent=ACCENT_BLUE)
+        outer.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
 
-        # Filter bar
-        filter_row = tk.Frame(hist_frame, bg=config.DASH_BG)
-        filter_row.pack(fill=tk.X, padx=4, pady=(4, 0))
-        tk.Label(filter_row, text="Filter:", fg=config.DASH_FG, bg=config.DASH_BG,
-                 font=("Arial", 9)).pack(side=tk.LEFT)
+        # Filter row inside card header area
+        filter_row = tk.Frame(outer.header_frame, bg=BG_CARD)
+        filter_row.pack(side=tk.RIGHT, padx=8)
+        tk.Label(filter_row, text="Filter:", font=FONT_LABEL,
+                 fg=config.COLOR_MUTED, bg=BG_CARD).pack(side=tk.LEFT)
         self._filter_var = tk.StringVar()
         self._filter_var.trace_add("write", lambda *_: self._refresh_history())
         tk.Entry(filter_row, textvariable=self._filter_var,
-                 bg="#313244", fg=config.DASH_FG,
+                 bg=BG_INPUT, fg=config.DASH_FG,
                  insertbackground=config.DASH_FG,
-                 relief=tk.FLAT, font=("Consolas", 9), width=30,
-                 ).pack(side=tk.LEFT, padx=4)
+                 relief=tk.FLAT, font=FONT_MONO_SM, width=28,
+                 ).pack(side=tk.LEFT, padx=(4, 0))
 
-        # History listbox with scrollbar
-        hist_inner = tk.Frame(hist_frame, bg=config.DASH_BG)
-        hist_inner.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
-
-        hist_scroll = tk.Scrollbar(hist_inner)
-        hist_scroll.pack(side=tk.RIGHT, fill=tk.Y)
-
+        # Listbox with scrollbar
+        inner = tk.Frame(outer.body, bg=BG_SURFACE)
+        inner.pack(fill=tk.BOTH, expand=True)
+        sb = tk.Scrollbar(inner, bg=BG_SURFACE, troughcolor=BG_SURFACE)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
         self._hist_list = tk.Listbox(
-            hist_inner, bg=config.DASH_LOG_BG, fg=config.DASH_FG,
-            font=("Consolas", 10), relief=tk.FLAT, selectbackground="#313244",
-            yscrollcommand=hist_scroll.set,
+            inner, bg=BG_SURFACE, fg=config.DASH_FG,
+            font=FONT_MONO_SM, relief=tk.FLAT, selectbackground=BTN_MUTED,
+            yscrollcommand=sb.set, bd=0, highlightthickness=0,
         )
         self._hist_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        hist_scroll.config(command=self._hist_list.yview)
+        sb.config(command=self._hist_list.yview)
         self._hist_list.bind("<Double-Button-1>", self._on_history_double_click)
 
-        # Bottom: event log
-        log_frame = tk.LabelFrame(parent, text="Event Log",
-                                   bg=config.DASH_BG, fg=config.DASH_FG,
-                                   font=("Arial", 10, "bold"), relief=tk.FLAT)
-        log_frame.pack(fill=tk.X, pady=(6, 0))
+    # ── Log drawer ────────────────────────────────────────────────────────────
 
+    def _build_log_drawer(self) -> None:
+        self._log_frame = tk.Frame(self.root, bg=BG_DEEP)
+        self._log_frame.pack(fill=tk.X, padx=12, pady=(0, 4))
+
+        # Header row
+        hdr = tk.Frame(self._log_frame, bg=BG_DEEP)
+        hdr.pack(fill=tk.X)
+        tk.Label(hdr, text="EVENT LOG", font=("Segoe UI", 8, "bold"),
+                 fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.LEFT, padx=8, pady=4)
+        self._log_toggle_lbl = tk.Label(hdr, text="▼ hide", font=FONT_LABEL,
+                                         fg=ACCENT_BLUE, bg=BG_DEEP, cursor="hand2")
+        self._log_toggle_lbl.pack(side=tk.RIGHT, padx=8)
+        self._log_toggle_lbl.bind("<Button-1>", lambda e: self._toggle_log())
+
+        self._log_body = tk.Frame(self._log_frame, bg=BG_DEEP)
+        self._log_body.pack(fill=tk.X)
         self._log_text = scrolledtext.ScrolledText(
-            log_frame, bg=config.DASH_LOG_BG, fg=config.DASH_LOG_FG,
-            font=("Consolas", 9), relief=tk.FLAT, state=tk.DISABLED,
-            height=7, wrap=tk.WORD,
+            self._log_body, bg=BG_DEEP, fg=config.DASH_LOG_FG,
+            font=FONT_MONO_SM, relief=tk.FLAT, state=tk.DISABLED,
+            height=6, wrap=tk.WORD, bd=0,
         )
-        self._log_text.pack(fill=tk.BOTH, expand=True, padx=4, pady=4)
+        self._log_text.pack(fill=tk.X, padx=8, pady=(0, 6))
+
+    def _toggle_log(self) -> None:
+        if self._log_visible:
+            self._log_body.pack_forget()
+            self._log_toggle_lbl.configure(text="▲ show")
+        else:
+            self._log_body.pack(fill=tk.X)
+            self._log_toggle_lbl.configure(text="▼ hide")
+        self._log_visible = not self._log_visible
+
+    # ── Status bar ────────────────────────────────────────────────────────────
 
     def _build_status_bar(self) -> None:
-        bar = tk.Frame(self.root, bg="#11111B", height=22)
+        bar = tk.Frame(self.root, bg=BG_DEEP, height=22)
         bar.pack(side=tk.BOTTOM, fill=tk.X)
         bar.pack_propagate(False)
-
-        self._status_lbl = tk.Label(
-            bar, text="Ready",
-            font=("Arial", 9), fg=config.DASH_FG, bg="#11111B",
-        )
+        self._status_lbl = tk.Label(bar, text="Ready", font=FONT_LABEL,
+                                     fg=config.DASH_FG, bg=BG_DEEP)
         self._status_lbl.pack(side=tk.LEFT, padx=10)
-
+        tk.Label(bar, text="by Niconomics", font=("Segoe UI", 8),
+                 fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.RIGHT, padx=12)
         s = self.state.settings
-        tk.Label(
-            bar,
-            text=f"v1.0 | {s.get('host','127.0.0.1')}:{s.get('port', 8787)}",
-            font=("Arial", 9), fg=config.COLOR_MUTED, bg="#11111B",
-        ).pack(side=tk.RIGHT, padx=10)
+        tk.Label(bar, text=f"{s.get('host','127.0.0.1')}:{s.get('port',8787)}",
+                 font=FONT_LABEL, fg=config.COLOR_MUTED, bg=BG_DEEP,
+                 ).pack(side=tk.RIGHT, padx=(10, 4))
 
     # ------------------------------------------------------------------ queue polling
 
@@ -270,7 +287,6 @@ class Dashboard:
         self.root.after(POLL_INTERVAL_MS, self._poll_queue)
 
     def _poll_queue(self) -> None:
-        """Drain the inter-thread queue and dispatch messages."""
         try:
             q = self.state.alert_queue
             while not q.empty():
@@ -282,9 +298,7 @@ class Dashboard:
             self._schedule_poll()
 
     def _dispatch(self, msg) -> None:
-        kind = msg.kind
-        data = msg.data
-
+        kind, data = msg.kind, msg.data
         if kind == "alert":
             self._handle_new_alert(data)
         elif kind == "queued_alert":
@@ -301,9 +315,10 @@ class Dashboard:
 
     def _handle_new_alert(self, alert: Alert) -> None:
         self._refresh_all()
+        # Red accent on active card
+        self._active_card.set_accent(ACCENT_RED)
         if self.state.settings.get("auto_open_fullscreen", True):
             self._open_alert_window(alert)
-        # Start sound
         if not self.state.sound_silenced:
             s = self.state.settings
             sound.start_alert_sound(s.get("sound_mode", "beep"), s.get("wav_path", ""))
@@ -318,15 +333,12 @@ class Dashboard:
         if alert is None:
             messagebox.showinfo("No Alert", "No active alert to display.", parent=self.root)
             return
-
-        # Close previous if any
         if self._alert_window is not None:
             try:
                 self._alert_window.destroy()
             except Exception:
                 pass
             self._alert_window = None
-
         s = self.state.settings
         try:
             self._alert_window = AlertWindow(
@@ -340,56 +352,42 @@ class Dashboard:
                 flash_interval_ms=s.get("flash_interval_ms", 600),
                 always_on_top=s.get("always_on_top", True),
             )
-            log.info(f"Alert window opened: {alert.ticket_id}")
         except Exception as exc:
             log.error(f"Failed to open alert window: {exc}", exc_info=True)
-            self._append_log(f"❌ Could not open alert window: {exc}")
             messagebox.showerror("Alert Error",
-                                 f"Could not open full-screen alert:\n{exc}\n\n"
-                                 "Alert is still active in the dashboard.",
+                                 f"Could not open full-screen alert:\n{exc}",
                                  parent=self.root)
 
     # ------------------------------------------------------------------ actions
 
-    def _do_start_listener(self) -> None:
-        if self.state.listener_running:
-            self._append_log("ℹ️ Listener already running")
-            return
-        from listener import ListenerThread
-        t = ListenerThread(self.state)
-        self.state.listener_thread = t
-        t.start()
-        self._append_log("▶ Starting listener…")
-        self._set_status("Starting listener…")
+    def _do_restart_listener(self) -> None:
+        """Stop the current listener thread and start a fresh one."""
+        import threading
+        def _restart():
+            t = self.state.listener_thread
+            if t is not None and t.is_alive():
+                self.state.post("log", "↺ Restarting listener…")
+                try:
+                    t.stop()
+                    t.join(timeout=4)
+                except Exception as exc:
+                    log.warning(f"Listener stop error: {exc}")
 
-    def _do_stop_listener(self) -> None:
-        if not self.state.listener_running:
-            self._append_log("ℹ️ Listener not running")
-            return
-        # Flask dev server can't be stopped cleanly from outside.
-        # Best approach for a local tool: restart the app.
-        messagebox.showinfo(
-            "Stop Listener",
-            "The Flask dev server cannot be stopped independently.\n"
-            "To restart the listener, restart the application.\n\n"
-            "Tip: Use Ctrl+C in the terminal to quit cleanly.",
-            parent=self.root,
-        )
-        self._append_log("ℹ️ Listener stop requested – restart app to rebind port")
+            from listener import ListenerThread
+            new_t = ListenerThread(self.state)
+            self.state.listener_thread = new_t
+            new_t.start()
+
+        threading.Thread(target=_restart, daemon=True).start()
+        self._set_status("Restarting listener…")
 
     def _do_test_alert(self) -> None:
-        log.info("Test alert triggered from dashboard")
-        self._append_log("🧪 Triggering test alert…")
-        import threading
-
+        import threading, uuid
         def _inject():
-            """Inject a test alert directly into state (no HTTP round-trip needed)."""
             from listener import _build_test_payload
             from parser import build_alert
             payload = _build_test_payload()
             alert = build_alert(payload)
-            # Give the test alert a unique dedupe key so it always fires
-            import uuid
             alert.dedupe_key = f"test:{uuid.uuid4().hex[:8]}"
             placement = self.state.push_alert(alert)
             if placement == "active":
@@ -397,8 +395,7 @@ class Dashboard:
                 self.state.post("log", f"🚨 Test P1 ALERT: {alert.ticket_id}")
             else:
                 self.state.post("queued_alert", alert)
-                self.state.post("log", f"📋 Test alert queued (queue: {self.state.queue_count()})")
-
+                self.state.post("log", f"📋 Test alert queued ({self.state.queue_count()})")
         threading.Thread(target=_inject, daemon=True).start()
 
     def _do_open_alert(self) -> None:
@@ -411,15 +408,11 @@ class Dashboard:
             self._append_log("🔇 Alert silenced")
             self._pill_sound.set("MUTED", config.COLOR_MUTED)
         else:
-            # Un-silence → restart sound if there's an active alert
             if self.state.active_alert:
                 s = self.state.settings
                 sound.start_alert_sound(s.get("sound_mode", "beep"), s.get("wav_path", ""))
             self._append_log("🔊 Alert un-silenced")
             self._pill_sound.set("ON", config.COLOR_OK)
-        # Update alert window button if open
-        if self._alert_window:
-            pass  # AlertWindow handles its own button state
 
     def _do_acknowledge(self) -> None:
         old = self.state.acknowledge_active()
@@ -427,31 +420,26 @@ class Dashboard:
             self._append_log("ℹ️ No active alert to acknowledge")
             return
         sound.stop_alert_sound()
-        log.info(f"Alert acknowledged: {old.ticket_id}")
         self._append_log(f"✔ Acknowledged: {old.ticket_id}")
-
-        # Close alert window if open
         if self._alert_window:
             try:
                 self._alert_window.destroy()
             except Exception:
                 pass
             self._alert_window = None
-
-        # If a new alert was promoted, open it
         if self.state.active_alert and self.state.settings.get("auto_open_fullscreen"):
             self._open_alert_window(self.state.active_alert)
             s = self.state.settings
             sound.start_alert_sound(s.get("sound_mode", "beep"), s.get("wav_path", ""))
-
         self._refresh_all()
+        if not self.state.active_alert:
+            self._active_card.set_accent(ACCENT_BLUE)
         if self.state.settings.get("persist_history"):
             storage.save_history(self.state.history)
 
     def _do_next_alert(self) -> None:
         next_alert = self.state.next_queued()
         sound.stop_alert_sound()
-        log.info("Cycling to next queued alert")
         self._append_log("⏭ Next alert")
         if self._alert_window:
             try:
@@ -459,7 +447,6 @@ class Dashboard:
             except Exception:
                 pass
             self._alert_window = None
-
         if next_alert:
             if self.state.settings.get("auto_open_fullscreen"):
                 self._open_alert_window(next_alert)
@@ -482,8 +469,7 @@ class Dashboard:
         if not history:
             messagebox.showinfo("Copy JSON", "No alerts in history.", parent=self.root)
             return
-        alert = history[0]
-        text = json.dumps(alert.to_dict(), indent=2, ensure_ascii=False)
+        text = json.dumps(history[0].to_dict(), indent=2, ensure_ascii=False)
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
         self._append_log("📋 Latest alert JSON copied to clipboard")
@@ -492,21 +478,16 @@ class Dashboard:
         def _on_save(new_settings):
             self.state.settings.update(new_settings)
             storage.save_settings(self.state.settings)
-            self._refresh_info()
             self._append_log("⚙ Settings updated")
             log.info("Settings updated from dialog")
-
         SettingsDialog(self.root, self.state.settings, _on_save)
 
     def _do_open_logs(self) -> None:
-        logs_dir = config.LOGS_DIR
-        logs_dir.mkdir(parents=True, exist_ok=True)
+        config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
         try:
-            os.startfile(str(logs_dir))
+            os.startfile(str(config.LOGS_DIR))
         except Exception as exc:
-            messagebox.showinfo("Logs",
-                                f"Logs folder: {logs_dir}\n\nCould not open: {exc}",
-                                parent=self.root)
+            messagebox.showinfo("Logs", f"Logs: {config.LOGS_DIR}\n\n{exc}", parent=self.root)
 
     def _do_test_sound(self) -> None:
         s = self.state.settings
@@ -518,14 +499,13 @@ class Dashboard:
             daemon=True,
         ).start()
 
-    # ------------------------------------------------------------------ refresh helpers
+    # ------------------------------------------------------------------ refresh
 
     def _refresh_all(self) -> None:
         self._refresh_active()
         self._refresh_queued()
         self._refresh_history()
         self._refresh_pills()
-        self._refresh_info()
         if self._alert_window:
             try:
                 self._alert_window.update_queue_count(self.state.queue_count())
@@ -537,90 +517,71 @@ class Dashboard:
         self._active_text.delete("1.0", tk.END)
         a = self.state.active_alert
         if a:
-            self._active_text.insert(tk.END,
-                f"Ticket:   {a.ticket_id}\n"
-                f"Client:   {a.client}\n"
-                f"Summary:  {a.summary}\n"
-                f"Source:   {a.source}\n"
-                f"Priority: {a.priority}  Severity: {a.severity or '—'}\n"
-                f"Team:     {a.assigned_team or '—'}\n"
-                f"Received: {a.display_received()}\n"
-            )
+            lines = [
+                ("Ticket   ", a.ticket_id),
+                ("Client   ", a.client),
+                ("Summary  ", a.summary),
+                ("Source   ", a.source),
+                ("Priority ", f"{a.priority}  ·  {a.severity or '—'}"),
+                ("Team     ", a.assigned_team or "—"),
+                ("Received ", a.display_received()),
+            ]
+            for label, val in lines:
+                self._active_text.insert(tk.END, label, "lbl")
+                self._active_text.insert(tk.END, f"  {val}\n")
+            self._active_text.tag_configure("lbl", foreground=config.COLOR_MUTED,
+                                             font=("Segoe UI", 9))
         else:
-            self._active_text.insert(tk.END, "(no active alert)")
+            self._active_text.insert(tk.END, "\n  No active alert", "empty")
+            self._active_text.tag_configure("empty", foreground=config.COLOR_MUTED,
+                                             font=("Segoe UI", 10))
         self._active_text.configure(state=tk.DISABLED)
 
     def _refresh_queued(self) -> None:
         self._queued_list.delete(0, tk.END)
         with self.state._lock:
             for a in self.state.alert_queue_list:
-                self._queued_list.insert(tk.END,
-                    f"{a.display_received()}  {a.ticket_id}  {a.client[:24]}")
+                self._queued_list.insert(
+                    tk.END, f"  {a.display_received()}  {a.ticket_id}  {a.client[:22]}")
 
     def _refresh_history(self) -> None:
         self._hist_list.delete(0, tk.END)
         filt = self._filter_var.get().strip().lower()
         for a in self.state.get_recent_history(200):
-            source_tag = _source_tag(a.source)
-            row = f"{a.display_received()}  {source_tag}  {a.ticket_id}  {a.client[:24]}  {a.short_summary(40)}"
+            tag = _source_tag(a.source)
+            row = f"  {a.display_received()}  {tag}  {a.ticket_id}  {a.client[:22]}  {a.short_summary(42)}"
             if filt and filt not in row.lower():
                 continue
             self._hist_list.insert(tk.END, row)
 
     def _refresh_pills(self) -> None:
-        if self.state.listener_running:
-            self._pill_listener.set("RUNNING", config.COLOR_OK)
-        else:
-            self._pill_listener.set("STOPPED", config.COLOR_ERR)
-
-        if self.state.sound_silenced:
-            self._pill_sound.set("MUTED", config.COLOR_MUTED)
-        else:
-            self._pill_sound.set("ON", config.COLOR_OK)
-
-        active_count = 1 if self.state.active_alert else 0
-        self._pill_active.set(
-            str(active_count),
-            config.COLOR_ERR if active_count > 0 else config.COLOR_MUTED,
+        self._pill_listener.set(
+            "RUNNING" if self.state.listener_running else "STOPPED",
+            config.COLOR_OK if self.state.listener_running else config.COLOR_ERR,
         )
+        self._pill_sound.set(
+            "MUTED" if self.state.sound_silenced else "ON",
+            config.COLOR_MUTED if self.state.sound_silenced else config.COLOR_OK,
+        )
+        active = 1 if self.state.active_alert else 0
+        self._pill_active.set(str(active),
+                               config.COLOR_ERR if active else config.COLOR_MUTED)
         q = self.state.queue_count()
-        self._pill_queued.set(
-            str(q),
-            config.COLOR_WARN if q > 0 else config.COLOR_MUTED,
-        )
+        self._pill_queued.set(str(q), config.COLOR_WARN if q else config.COLOR_MUTED)
 
-    def _refresh_info(self) -> None:
-        self._info_lbl.configure(text=self._info_text())
-
-    def _info_text(self) -> str:
-        s = self.state.settings
-        host = s.get("host", config.DEFAULT_HOST)
-        port = s.get("port", config.DEFAULT_PORT)
-        auth = "ON" if s.get("auth_enabled") else "OFF"
-        snd = s.get("sound_mode", "beep").upper()
-        lan = "LAN" if s.get("allow_lan") else "localhost"
-        return (
-            f"Host:  {host}:{port}\n"
-            f"Mode:  {lan}\n"
-            f"Auth:  {auth}\n"
-            f"Sound: {snd}"
-        )
-
-    # ------------------------------------------------------------------ log panel
+    # ------------------------------------------------------------------ log
 
     def _append_log(self, message: str) -> None:
         ts = now_display()
-        line = f"[{ts}] {message}\n"
         self._log_text.configure(state=tk.NORMAL)
-        self._log_text.insert(tk.END, line)
-        # Trim log panel
+        self._log_text.insert(tk.END, f"[{ts}]  {message}\n")
         lines = int(self._log_text.index(tk.END).split(".")[0])
         if lines > LOG_MAX_LINES:
             self._log_text.delete("1.0", f"{lines - LOG_MAX_LINES}.0")
         self._log_text.see(tk.END)
         self._log_text.configure(state=tk.DISABLED)
 
-    # ------------------------------------------------------------------ status
+    # ------------------------------------------------------------------ misc
 
     def _set_status(self, text: str) -> None:
         self._status_lbl.configure(text=text)
@@ -634,36 +595,27 @@ class Dashboard:
             self._set_status("Listener stopped")
             self._append_log("🔴 Listener stopped")
 
-    # ------------------------------------------------------------------ uptime
-
     def _schedule_uptime(self) -> None:
         self._uptime_job = self.root.after(1000, self._tick_uptime)
 
     def _tick_uptime(self) -> None:
-        self._uptime_lbl.configure(text=f"Uptime: {self.state.uptime_str()}")
+        self._uptime_lbl.configure(text=self.state.uptime_str())
         self._schedule_uptime()
-
-    # ------------------------------------------------------------------ history double-click
 
     def _on_history_double_click(self, event) -> None:
         sel = self._hist_list.curselection()
         if not sel:
             return
-        idx = sel[0]
         history = self.state.get_recent_history(200)
-        if idx >= len(history):
+        if sel[0] >= len(history):
             return
-        alert = history[idx]
-        import json as _json
+        alert = history[sel[0]]
         from alert_ui import _show_details_popup
-        raw = _json.dumps(alert.raw_payload or alert.to_dict(), indent=2, ensure_ascii=False)
+        raw = json.dumps(alert.raw_payload or alert.to_dict(), indent=2, ensure_ascii=False)
         _show_details_popup(self.root, alert, raw)
-
-    # ------------------------------------------------------------------ close
 
     def _on_close(self) -> None:
         if messagebox.askyesno("Quit", "Quit NetWatch?", parent=self.root):
-            log.info("Dashboard close requested – shutting down")
             sound.stop_alert_sound()
             if self.state.settings.get("persist_history"):
                 storage.save_history(self.state.history)
@@ -676,37 +628,71 @@ class Dashboard:
 
 
 # ---------------------------------------------------------------------------
-# Status Pill widget
+# Widgets
 # ---------------------------------------------------------------------------
 
+class _Card(tk.Frame):
+    """A card with a coloured top accent bar, title, and body area."""
+
+    def __init__(self, parent, title: str, accent: str = ACCENT_BLUE) -> None:
+        super().__init__(parent, bg=BG_CARD, padx=0, pady=0)
+        self._accent_bar = tk.Frame(self, bg=accent, height=3)
+        self._accent_bar.pack(fill=tk.X)
+
+        self.header_frame = tk.Frame(self, bg=BG_CARD)
+        self.header_frame.pack(fill=tk.X, padx=10, pady=(6, 4))
+        tk.Label(self.header_frame, text=title,
+                 font=("Segoe UI", 8, "bold"),
+                 fg=config.COLOR_MUTED, bg=BG_CARD).pack(side=tk.LEFT)
+
+        self.body = tk.Frame(self, bg=BG_SURFACE)
+        self.body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
+
+    def set_accent(self, color: str) -> None:
+        self._accent_bar.configure(bg=color)
+
+
 class _Pill(tk.Frame):
-    """Small coloured label used as a status indicator."""
+    """Compact status indicator."""
 
     def __init__(self, parent, name: str, value: str, color: str) -> None:
-        super().__init__(parent, bg="#11111B")
-        tk.Label(self, text=name + ":", font=("Arial", 8),
-                 fg=config.DASH_FG, bg="#11111B").pack(side=tk.LEFT)
-        self._lbl = tk.Label(
-            self, text=value,
-            font=("Arial", 8, "bold"),
-            fg="#11111B", bg=color,
-            padx=5, pady=1,
-        )
-        self._lbl.pack(side=tk.LEFT, padx=2)
+        super().__init__(parent, bg=BG_DEEP)
+        tk.Label(self, text=name, font=("Segoe UI", 7),
+                 fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.LEFT)
+        self._lbl = tk.Label(self, text=value, font=("Segoe UI", 7, "bold"),
+                              fg=BG_DEEP, bg=color, padx=6, pady=1)
+        self._lbl.pack(side=tk.LEFT, padx=(2, 0))
 
     def set(self, value: str, color: str) -> None:
         self._lbl.configure(text=value, bg=color)
 
 
 # ---------------------------------------------------------------------------
-# Module-level helpers
+# Helpers
 # ---------------------------------------------------------------------------
 
+def _hover(widget, off: str, on: str) -> None:
+    widget.bind("<Enter>", lambda e: widget.configure(bg=on))
+    widget.bind("<Leave>", lambda e: widget.configure(bg=off))
+
+
+def _lighten(hex_color: str) -> str:
+    """Return a slightly lighter version of a hex colour for hover."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        r = min(255, r + 30)
+        g = min(255, g + 30)
+        b = min(255, b + 30)
+        return f"#{r:02x}{g:02x}{b:02x}"
+    except Exception:
+        return hex_color
+
+
 def _source_tag(source: str) -> str:
-    """Return a short fixed-width tag for the history list."""
     s = (source or "").lower()
     if "halo" in s:
-        return "[HALO  ]"
+        return "[HALO ]"
     if "datto" in s:
-        return "[DATTO ]"
-    return "[OTHER ]"
+        return "[DATTO]"
+    return "[OTHER]"

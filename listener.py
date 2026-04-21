@@ -148,22 +148,31 @@ class ListenerThread(threading.Thread):
         super().__init__(name="ListenerThread", daemon=True)
         self.app_state = app_state
         self._flask_app: Flask | None = None
+        self._server = None
 
     def run(self) -> None:
+        from werkzeug.serving import make_server
         s = self.app_state.settings
         host = s.get("host", config.DEFAULT_HOST)
         port = s.get("port", config.DEFAULT_PORT)
 
-        # LAN mode warning
         if s.get("allow_lan") and host == "0.0.0.0":
             log.warning("⚠️  Listener bound to 0.0.0.0 – LAN MODE ACTIVE")
             self.app_state.post("log", "⚠️ LAN mode: listener bound to 0.0.0.0")
         elif host == "0.0.0.0":
-            # allow_lan not set but host is 0.0.0.0 – enforce localhost
             host = "127.0.0.1"
             log.info("allow_lan=False – forcing host to 127.0.0.1")
 
         self._flask_app = create_flask_app(self.app_state)
+
+        try:
+            self._server = make_server(host, port, self._flask_app)
+        except OSError as exc:
+            msg = f"Port {port} already in use or bind failed: {exc}"
+            log.error(msg)
+            self.app_state.post("log", f"❌ {msg}")
+            self.app_state.post("error", msg)
+            return
 
         log.info(f"Listener starting on {host}:{port}")
         self.app_state.post("log", f"🟢 Listener started on {host}:{port}")
@@ -171,18 +180,7 @@ class ListenerThread(threading.Thread):
         self.app_state.post("listener_status", True)
 
         try:
-            # use_reloader=False is REQUIRED in a thread context
-            self._flask_app.run(
-                host=host,
-                port=port,
-                use_reloader=False,
-                threaded=True,
-            )
-        except OSError as exc:
-            msg = f"Port {port} already in use or bind failed: {exc}"
-            log.error(msg)
-            self.app_state.post("log", f"❌ {msg}")
-            self.app_state.post("error", msg)
+            self._server.serve_forever()
         except Exception as exc:
             log.error(f"Listener crashed: {exc}", exc_info=True)
             self.app_state.post("log", f"❌ Listener crashed: {exc}")
@@ -190,6 +188,12 @@ class ListenerThread(threading.Thread):
             self.app_state.listener_running = False
             self.app_state.post("listener_status", False)
             log.info("Listener thread exited")
+
+    def stop(self) -> None:
+        """Gracefully shut down the werkzeug server."""
+        if self._server:
+            self._server.shutdown()
+            log.info("Listener stop requested")
 
 
 # ---------------------------------------------------------------------------
