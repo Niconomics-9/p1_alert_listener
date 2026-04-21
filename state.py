@@ -62,6 +62,8 @@ class AppState:
             "wav_path": config.DEFAULT_WAV_PATH,
             "auth_enabled": config.DEFAULT_AUTH_ENABLED,
             "shared_secret": config.DEFAULT_SHARED_SECRET,
+            "ip_allowlist_enabled": False,
+            "allowed_ips": [],
             "max_history": config.DEFAULT_MAX_HISTORY,
             "persist_history": config.DEFAULT_PERSIST_HISTORY,
             "log_file": config.DEFAULT_LOG_FILE,

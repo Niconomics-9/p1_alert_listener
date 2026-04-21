@@ -101,6 +101,11 @@ class SettingsDialog:
                          s.get("auth_enabled", False), **pad)
         self._text_field(inner, "Shared secret value", "shared_secret",
                          s.get("shared_secret", ""), secret=True, **pad)
+        self._bool_field(inner, "Enable IP allowlist (Cloudflare + extra IPs only)",
+                         "ip_allowlist_enabled", s.get("ip_allowlist_enabled", False), **pad)
+        allowed_ips_str = ", ".join(s.get("allowed_ips", []))
+        self._text_field(inner, "Extra allowed IPs / CIDRs (comma separated)",
+                         "allowed_ips_raw", allowed_ips_str, **pad)
 
         # ── Section: History ──────────────────────────────────────────────
         self._section(inner, "📋  History & Storage")
@@ -252,6 +257,12 @@ class SettingsDialog:
                 new_settings[key] = val
             except ValueError:
                 errors.append(f"Invalid value for '{key}'")
+
+        # Convert allowed_ips_raw string → list
+        raw = new_settings.pop("allowed_ips_raw", "")
+        new_settings["allowed_ips"] = [
+            ip.strip() for ip in raw.split(",") if ip.strip()
+        ]
 
         if errors:
             messagebox.showerror("Validation Error", "\n".join(errors), parent=self._win)
