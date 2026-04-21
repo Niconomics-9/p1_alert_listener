@@ -182,7 +182,7 @@ def _try_init_tray(root: tk.Tk, state: AppState) -> None:
         def _on_minimize(event):
             if root.state() == "iconic":
                 root.withdraw()
-                icon.notify("P1 Alert Listener is running in the tray.")
+                icon.notify("NetWatch is running in the tray.")
 
         root.bind("<Unmap>", _on_minimize)
 

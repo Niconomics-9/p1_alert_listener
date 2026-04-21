@@ -242,7 +242,7 @@ def _build_test_payload() -> dict:
         "ticket_id": "TEST-001",
         "client": "Test Client Ltd",
         "summary": "TEST: Simulated P1 Critical Incident",
-        "source": "P1 Alert Listener – Test",
+        "source": "NetWatch – Test",
         "priority": "P1",
         "severity": "critical",
         "assigned_team": "NOC Team",

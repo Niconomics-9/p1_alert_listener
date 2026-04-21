@@ -28,7 +28,7 @@ class SettingsDialog:
         self.on_save = on_save
 
         self._win = tk.Toplevel(parent)
-        self._win.title("Settings – P1 Alert Listener")
+        self._win.title("Settings – NetWatch")
         self._win.configure(bg=config.DASH_BG)
         self._win.geometry("620x700")
         self._win.resizable(True, True)

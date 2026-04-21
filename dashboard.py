@@ -66,10 +66,16 @@ class Dashboard:
         bar.pack(fill=tk.X)
         bar.pack_propagate(False)
 
+        title_frame = tk.Frame(bar, bg="#11111B")
+        title_frame.pack(side=tk.LEFT, padx=16, pady=8)
         tk.Label(
-            bar, text="⚡ P1 Alert Listener",
+            title_frame, text="⚡ NetWatch",
             font=("Arial Black", 18), fg=config.DASH_ACCENT, bg="#11111B",
-        ).pack(side=tk.LEFT, padx=16, pady=8)
+        ).pack(side=tk.LEFT)
+        tk.Label(
+            title_frame, text="  by Niconomics",
+            font=("Arial", 9), fg=config.DASH_LOG_FG, bg="#11111B",
+        ).pack(side=tk.LEFT, padx=(2, 0), pady=(8, 0))
 
         # Uptime
         self._uptime_lbl = tk.Label(
@@ -656,7 +662,7 @@ class Dashboard:
     # ------------------------------------------------------------------ close
 
     def _on_close(self) -> None:
-        if messagebox.askyesno("Quit", "Quit P1 Alert Listener?", parent=self.root):
+        if messagebox.askyesno("Quit", "Quit NetWatch?", parent=self.root):
             log.info("Dashboard close requested – shutting down")
             sound.stop_alert_sound()
             if self.state.settings.get("persist_history"):

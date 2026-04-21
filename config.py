@@ -67,7 +67,8 @@ LOG_BACKUP_COUNT = 3              # Keep 3 rotated files
 # ---------------------------------------------------------------------------
 # UI colours and labels
 # ---------------------------------------------------------------------------
-APP_TITLE = "P1 Alert Listener"
+APP_TITLE = "NetWatch"
+APP_SUBTITLE = "by Niconomics"
 
 # Full-screen alert colours
 ALERT_BG_1 = "#CC0000"   # Bright red  (flash state A)
