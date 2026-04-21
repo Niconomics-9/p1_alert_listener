@@ -94,7 +94,7 @@ def create_flask_app(app_state) -> Flask:
         app_state.post("log", f"📩 Webhook received from {client_ip}")
 
         # P1 check
-        if not is_p1_alert(payload):
+        if not is_p1_alert(payload, app_state.settings):
             log.info("WEBHOOK payload not P1 – ignored")
             app_state.post("log", "ℹ️ Payload received but not P1 – ignored")
             return jsonify({"status": "ignored", "reason": "not p1"}), 200

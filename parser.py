@@ -1,10 +1,10 @@
 """
 parser.py – Payload parsing and P1 trigger logic.
 
-ALL matching decisions live in is_p1_alert().  Edit that function to
-change what qualifies as an alert-worthy event.
+P1 detection is per-source. Each source (halo_psa, datto_rmm, generic)
+has its own configurable trigger rules stored in settings["source_rules"].
 
-Field extraction lives in extract_alert_fields().  Add new field mappings
+Field extraction lives in extract_alert_fields(). Add new field mappings
 here without touching the rest of the app.
 """
 from __future__ import annotations
@@ -18,156 +18,167 @@ from utils import now_iso
 log = logging.getLogger("p1alert.parser")
 
 # ---------------------------------------------------------------------------
-# Impact / urgency value maps (adjust to match your tool's terminology)
+# Source detection fingerprints
 # ---------------------------------------------------------------------------
-CRITICAL_IMPACT_VALUES = {"1", "highest", "critical", "high"}
-CRITICAL_URGENCY_VALUES = {"1", "highest", "critical", "high"}
 
-# Datto RMM priority values that map to P1
-DATTO_CRITICAL_PRIORITIES = {"critical", "high"}
+# Payload keys that uniquely identify each source
+_DATTO_FINGERPRINTS = {"alertUid", "alertTypeId", "alertMessage", "siteName"}
+_HALO_FINGERPRINTS  = {"client_name", "priority_name", "tickettypeid", "ref"}
+
+
+def detect_source(payload: dict[str, Any]) -> str:
+    """
+    Identify which system sent the payload.
+    Returns "datto_rmm", "halo_psa", or "generic".
+    """
+    keys = set(payload.keys())
+    if keys & _DATTO_FINGERPRINTS:
+        return "datto_rmm"
+    if keys & _HALO_FINGERPRINTS:
+        return "halo_psa"
+    return "generic"
+
+
+# ---------------------------------------------------------------------------
+# Default per-source rules
+# ---------------------------------------------------------------------------
+
+def default_source_rules() -> dict[str, Any]:
+    return {
+        "halo_psa": {
+            "enabled": True,
+            # Trigger if priority contains any of these strings (case-insensitive)
+            "trigger_priorities": ["p1"],
+            # Trigger if severity contains any of these strings
+            "trigger_severities": ["critical"],
+            # Trigger if priority is exactly 1 (integer)
+            "trigger_priority_id_1": True,
+        },
+        "datto_rmm": {
+            "enabled": True,
+            "trigger_priorities": ["critical", "high"],
+            "trigger_severities": [],
+            # Trigger on Datto alertTypeId 1003 (device offline) regardless of priority
+            "trigger_offline_alerts": True,
+        },
+        "generic": {
+            "enabled": True,
+            "trigger_priorities": ["p1"],
+            "trigger_severities": ["critical"],
+            "trigger_priority_id_1": True,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def is_p1_alert(payload: dict[str, Any]) -> bool:
+def is_p1_alert(payload: dict[str, Any], settings: dict[str, Any] | None = None) -> bool:
     """
     Return True if the payload describes a P1 / critical incident.
 
-    Matching rules (any match → True):
-      1. priority == "P1" (case-insensitive, also matches "P1 - Critical" etc.)
-      2. priority == 1   (integer)
-      3. priority_name contains "P1"
-      4. severity contains "critical"
-      5. impact   in CRITICAL_IMPACT_VALUES
-      6. urgency  in CRITICAL_URGENCY_VALUES
-
-    Add more rules below; keep them explicit and easy to read.
+    Uses per-source rules from settings["source_rules"] when provided,
+    falling back to default_source_rules() if not configured.
     """
-    # ── Rule 1 & 2: priority field ────────────────────────────────────────
+    source = detect_source(payload)
+    rules_map = (settings or {}).get("source_rules", default_source_rules())
+
+    # Fall back to defaults for any missing source
+    defaults = default_source_rules()
+    rules: dict[str, Any] = {**defaults.get(source, defaults["generic"]),
+                              **rules_map.get(source, {})}
+
+    if not rules.get("enabled", True):
+        log.debug(f"Source '{source}' is disabled – ignoring payload")
+        return False
+
+    log.debug(f"Checking P1 rules for source='{source}'")
+
+    # ── Priority string match ─────────────────────────────────────────────
     priority_raw = (
         payload.get("priority")
         or payload.get("priority_id")
+        or payload.get("priority_name")
         or ""
     )
     priority_str = str(priority_raw).strip().lower()
 
-    if "p1" in priority_str:
-        log.debug(f"MATCH: priority field contains 'p1' → {priority_raw!r}")
-        return True
+    for trigger in rules.get("trigger_priorities", []):
+        if trigger.lower() in priority_str:
+            log.debug(f"MATCH [{source}]: priority '{priority_str}' contains '{trigger}'")
+            return True
 
-    if priority_raw == 1 or priority_str == "1":
-        log.debug(f"MATCH: priority == 1 → {priority_raw!r}")
-        return True
+    # ── Priority == 1 (integer / Halo style) ─────────────────────────────
+    if rules.get("trigger_priority_id_1", False):
+        if priority_raw == 1 or priority_str == "1":
+            log.debug(f"MATCH [{source}]: priority == 1")
+            return True
 
-    # ── Rule 3: priority_name ─────────────────────────────────────────────
-    priority_name = str(payload.get("priority_name", "")).strip().lower()
-    if "p1" in priority_name:
-        log.debug(f"MATCH: priority_name contains 'p1' → {priority_name!r}")
-        return True
-
-    # ── Rule 4: severity ──────────────────────────────────────────────────
+    # ── Severity string match ─────────────────────────────────────────────
     severity = str(payload.get("severity", "")).strip().lower()
-    if "critical" in severity:
-        log.debug(f"MATCH: severity contains 'critical' → {severity!r}")
-        return True
+    for trigger in rules.get("trigger_severities", []):
+        if trigger.lower() in severity:
+            log.debug(f"MATCH [{source}]: severity '{severity}' contains '{trigger}'")
+            return True
 
-    # ── Rule 5: impact ────────────────────────────────────────────────────
-    impact = str(payload.get("impact", "")).strip().lower()
-    if impact in CRITICAL_IMPACT_VALUES:
-        log.debug(f"MATCH: impact is critical → {impact!r}")
-        return True
+    # ── Datto: device offline alert type ─────────────────────────────────
+    if source == "datto_rmm" and rules.get("trigger_offline_alerts", True):
+        if str(payload.get("alertTypeId", "")) == "1003":
+            log.debug("MATCH [datto_rmm]: alertTypeId 1003 (device offline)")
+            return True
 
-    # ── Rule 6: urgency ───────────────────────────────────────────────────
-    urgency = str(payload.get("urgency", "")).strip().lower()
-    if urgency in CRITICAL_URGENCY_VALUES:
-        log.debug(f"MATCH: urgency is critical → {urgency!r}")
-        return True
-
-    # ── Rule 7: Datto RMM priority field ─────────────────────────────────
-    # Datto sends priority as "Critical", "High", "Moderate", "Low"
-    datto_priority = str(payload.get("priority", "")).strip().lower()
-    if datto_priority in DATTO_CRITICAL_PRIORITIES:
-        log.debug(f"MATCH: Datto priority is critical → {datto_priority!r}")
-        return True
-
-    # ── Rule 8: Datto alertTypeId 1003 = device offline (always critical) ─
-    if str(payload.get("alertTypeId", "")) == "1003":
-        log.debug("MATCH: Datto alertTypeId 1003 (device offline)")
-        return True
-
-    log.debug("NO MATCH: payload is not P1/critical")
+    log.debug(f"NO MATCH [{source}]: payload is not P1")
     return False
 
 
 def extract_alert_fields(payload: dict[str, Any]) -> dict[str, Any]:
     """
     Extract well-known fields from the payload into a normalised dict.
-
-    Supports generic webhook format AND HaloPSA-style payloads.
-    Add more field aliases below without changing anything else.
-
-    HaloPSA field mappings (example):
-      id          → ticket_id
-      ref         → ticket_id (fallback)
-      summary     → summary
-      client_name → client
-      team        → assigned_team
-      priority_id → priority
-      priority_name → priority display
+    Supports Halo PSA, Datto RMM, and generic webhook formats.
     """
     def _first(*keys: str, default: str = "") -> str:
-        """Return the first non-empty value found among the given keys."""
         for k in keys:
             val = _deep_get(payload, k)
             if val is not None and str(val).strip():
                 return str(val).strip()
         return default
 
+    source = detect_source(payload)
+
     ticket_id = _first(
-        # Generic / Halo
         "ticket_id", "id", "ref", "incident_id",
         "ticketId", "number", "ticket_number",
-        # Datto RMM
-        "alertUid",
+        "alertUid",                               # Datto
         default="Unknown Ticket",
     )
 
     client = _first(
-        # Generic / Halo
         "client", "client_name", "customer", "organization",
         "account", "tenant", "company",
-        # Datto RMM
-        "siteName",
+        "siteName",                               # Datto
         default="Unknown Client",
     )
 
-    # For Datto: combine alertMessage + hostname for a useful summary
-    datto_message = payload.get("alertMessage", "")
-    datto_host = payload.get("hostname", "")
-    datto_summary = (
-        f"{datto_message} [{datto_host}]"
-        if datto_message and datto_host
-        else datto_message or datto_host
-    )
-    if datto_summary and not any(payload.get(k) for k in ("summary", "title", "subject", "description", "message", "short_description")):
-        payload = {**payload, "_datto_summary": datto_summary}
+    # Datto: combine alertMessage + hostname into a useful summary
+    if source == "datto_rmm":
+        datto_msg  = payload.get("alertMessage", "")
+        datto_host = payload.get("hostname", "")
+        if datto_msg and datto_host:
+            payload = {**payload, "_summary": f"{datto_msg} [{datto_host}]"}
+        elif datto_msg or datto_host:
+            payload = {**payload, "_summary": datto_msg or datto_host}
 
     summary = _first(
-        # Generic / Halo
         "summary", "title", "subject", "description",
         "message", "short_description",
-        # Datto RMM (synthesised above)
-        "_datto_summary",
+        "_summary",                               # Datto synthesised
         default="No summary provided",
     )
 
-    source = _first(
-        # Generic / Halo
-        "source", "system", "integration", "source_system",
-        "origin", "tool",
-        default="Datto RMM" if payload.get("alertUid") else "Unknown Source",
+    source_label = _first(
+        "source", "system", "integration", "source_system", "origin", "tool",
+        default={"datto_rmm": "Datto RMM", "halo_psa": "Halo PSA"}.get(source, "Unknown Source"),
     )
 
     priority = _first(
@@ -175,37 +186,28 @@ def extract_alert_fields(payload: dict[str, Any]) -> dict[str, Any]:
         default="P1",
     )
 
-    severity = _first(
-        "severity", "impact_name",
-        # Datto: map priority → severity display
-        "priority",
-        default="",
-    )
+    severity = _first("severity", "impact_name", default="")
 
     assigned_team = _first(
-        # Generic / Halo
-        "assigned_team", "team", "assignment_group",
-        "assignee_team", "group",
+        "assigned_team", "team", "assignment_group", "assignee_team", "group",
         default="",
     )
 
     created_time = _first(
         "created_time", "created_at", "dateoccurred",
-        "opened_at", "created",
-        # Datto RMM
-        "timestamp",
+        "opened_at", "created", "timestamp",
         default="",
     )
 
     return {
-        "ticket_id": ticket_id,
-        "client": client,
-        "summary": summary,
-        "source": source,
-        "priority": priority,
-        "severity": severity,
+        "ticket_id":     ticket_id,
+        "client":        client,
+        "summary":       summary,
+        "source":        source_label,
+        "priority":      priority,
+        "severity":      severity,
         "assigned_team": assigned_team,
-        "created_time": created_time,
+        "created_time":  created_time,
     }
 
 
@@ -224,7 +226,6 @@ def build_alert(payload: dict[str, Any]) -> Alert:
         received_time=now_iso(),
         raw_payload=payload,
     )
-    # Build dedupe key: prefer ticket_id; fall back to client+summary hash
     if alert.ticket_id not in ("Unknown Ticket", ""):
         alert.dedupe_key = f"ticket:{alert.ticket_id}"
     else:
@@ -241,17 +242,11 @@ def build_alert(payload: dict[str, Any]) -> Alert:
 # ---------------------------------------------------------------------------
 
 def _deep_get(d: dict, key: str, default: Any = None) -> Any:
-    """
-    Simple key lookup that also checks one level of nesting.
-    e.g. _deep_get(d, "client_name") also tries d["client"]["name"].
-    """
     if key in d:
         return d[key]
-    # Try camelCase variant
     camel = _to_camel(key)
     if camel in d:
         return d[camel]
-    # Try nested: "client_name" → d["client"]["name"]
     parts = key.split("_", 1)
     if len(parts) == 2:
         parent, child = parts

@@ -107,6 +107,22 @@ class SettingsDialog:
         self._text_field(inner, "Extra allowed IPs / CIDRs (comma separated)",
                          "allowed_ips_raw", allowed_ips_str, **pad)
 
+        # ── Section: P1 Rules per source ─────────────────────────────────
+        self._section(inner, "🎯  P1 Detection Rules")
+        from parser import default_source_rules
+        src_rules = s.get("source_rules", default_source_rules())
+
+        for src_key, src_label in [("halo_psa", "Halo PSA"), ("datto_rmm", "Datto RMM"), ("generic", "Generic")]:
+            rules = src_rules.get(src_key, default_source_rules()[src_key])
+            self._bool_field(inner, f"{src_label} – enabled", f"sr_{src_key}_enabled",
+                             rules.get("enabled", True), **pad)
+            self._text_field(inner, f"{src_label} – trigger priorities (comma list)",
+                             f"sr_{src_key}_priorities",
+                             ", ".join(rules.get("trigger_priorities", [])), **pad)
+            self._text_field(inner, f"{src_label} – trigger severities (comma list)",
+                             f"sr_{src_key}_severities",
+                             ", ".join(rules.get("trigger_severities", [])), **pad)
+
         # ── Section: History ──────────────────────────────────────────────
         self._section(inner, "📋  History & Storage")
         self._int_field(inner, "Max history count", "max_history",
@@ -118,6 +134,12 @@ class SettingsDialog:
         self._section(inner, "📝  Logging")
         self._text_field(inner, "Log file path", "log_file",
                          s.get("log_file", config.DEFAULT_LOG_FILE), **pad)
+
+        # ── Section: System ───────────────────────────────────────────────
+        self._section(inner, "💻  System")
+        import autostart
+        self._bool_field(inner, "Start automatically with Windows",
+                         "autostart_enabled", autostart.is_enabled(), **pad)
 
         # ── Section: Integrations (future) ───────────────────────────────
         # TODO: Add outbound integration settings here when needed.
@@ -263,6 +285,31 @@ class SettingsDialog:
         new_settings["allowed_ips"] = [
             ip.strip() for ip in raw.split(",") if ip.strip()
         ]
+
+        # Rebuild source_rules from sr_* fields
+        from parser import default_source_rules
+        existing_rules = new_settings.get("source_rules", default_source_rules())
+        for src_key in ("halo_psa", "datto_rmm", "generic"):
+            base = existing_rules.get(src_key, default_source_rules()[src_key])
+            priorities_raw = new_settings.pop(f"sr_{src_key}_priorities", "")
+            severities_raw = new_settings.pop(f"sr_{src_key}_severities", "")
+            enabled = new_settings.pop(f"sr_{src_key}_enabled", base.get("enabled", True))
+            existing_rules[src_key] = {
+                **base,
+                "enabled": enabled,
+                "trigger_priorities": [v.strip() for v in priorities_raw.split(",") if v.strip()],
+                "trigger_severities": [v.strip() for v in severities_raw.split(",") if v.strip()],
+            }
+        new_settings["source_rules"] = existing_rules
+
+        # Autostart – apply immediately, don't store in settings.json
+        import autostart
+        want_autostart = new_settings.pop("autostart_enabled", False)
+        if want_autostart != autostart.is_enabled():
+            if want_autostart:
+                autostart.enable()
+            else:
+                autostart.disable()
 
         if errors:
             messagebox.showerror("Validation Error", "\n".join(errors), parent=self._win)

@@ -555,7 +555,8 @@ class Dashboard:
         self._hist_list.delete(0, tk.END)
         filt = self._filter_var.get().strip().lower()
         for a in self.state.get_recent_history(200):
-            row = f"{a.display_received()}  {a.ticket_id}  {a.client[:24]}  {a.short_summary(40)}"
+            source_tag = _source_tag(a.source)
+            row = f"{a.display_received()}  {source_tag}  {a.ticket_id}  {a.client[:24]}  {a.short_summary(40)}"
             if filt and filt not in row.lower():
                 continue
             self._hist_list.insert(tk.END, row)
@@ -689,3 +690,17 @@ class _Pill(tk.Frame):
 
     def set(self, value: str, color: str) -> None:
         self._lbl.configure(text=value, bg=color)
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+def _source_tag(source: str) -> str:
+    """Return a short fixed-width tag for the history list."""
+    s = (source or "").lower()
+    if "halo" in s:
+        return "[HALO  ]"
+    if "datto" in s:
+        return "[DATTO ]"
+    return "[OTHER ]"

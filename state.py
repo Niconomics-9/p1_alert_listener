@@ -12,6 +12,7 @@ import time
 from typing import Any
 
 from models import Alert, QueueMsg
+from parser import default_source_rules
 import config
 
 
@@ -64,6 +65,7 @@ class AppState:
             "shared_secret": config.DEFAULT_SHARED_SECRET,
             "ip_allowlist_enabled": False,
             "allowed_ips": [],
+            "source_rules": default_source_rules(),
             "max_history": config.DEFAULT_MAX_HISTORY,
             "persist_history": config.DEFAULT_PERSIST_HISTORY,
             "log_file": config.DEFAULT_LOG_FILE,
