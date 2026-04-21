@@ -1,0 +1,13 @@
+{
+  "_description": "Generic P1 webhook payload – all fields present",
+  "ticket_id": "INC-20240421-001",
+  "client": "Acme Corporation",
+  "summary": "Production database server unreachable – all services impacted",
+  "source": "Monitoring System",
+  "priority": "P1",
+  "severity": "critical",
+  "assigned_team": "NOC – Tier 2",
+  "created_time": "2024-04-21T09:15:00Z",
+  "impact": "highest",
+  "urgency": "highest"
+}

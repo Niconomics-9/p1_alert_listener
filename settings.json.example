@@ -1,0 +1,18 @@
+{
+  "_comment": "Copy this to data/settings.json to pre-seed settings. The app also writes here when you use the Settings dialog.",
+  "host": "127.0.0.1",
+  "port": 8787,
+  "allow_lan": false,
+  "cooldown_seconds": 60,
+  "flash_interval_ms": 600,
+  "always_on_top": true,
+  "auto_open_fullscreen": true,
+  "sound_mode": "beep",
+  "wav_path": "assets/alert.wav",
+  "auth_enabled": false,
+  "shared_secret": "",
+  "max_history": 100,
+  "persist_history": true,
+  "log_file": "logs/p1_alert.log",
+  "theme": "dark"
+}

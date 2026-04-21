@@ -1,0 +1,11 @@
+{
+  "_description": "Non-P1 payload – should be received and logged but NOT trigger an alert",
+  "ticket_id": "INC-20240421-002",
+  "client": "Beta Corp",
+  "summary": "User cannot access SharePoint folder",
+  "source": "Helpdesk",
+  "priority": "P3",
+  "severity": "low",
+  "assigned_team": "Desktop Support",
+  "created_time": "2024-04-21T10:00:00Z"
+}

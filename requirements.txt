@@ -1,0 +1,19 @@
+# P1 Alert Listener – Python dependencies
+#
+# Core (required)
+flask>=3.0,<4.0          # HTTP listener
+requests>=2.31           # Used by dashboard test-alert button to POST /test-alert
+python-dotenv>=1.0       # Load .env overrides (optional at runtime, listed for convenience)
+#
+# Optional – system tray support
+# Uncomment and install if you want minimize-to-tray:
+# pystray>=0.19
+# pillow>=10.0
+#
+# Notes:
+#   winsound  – stdlib, Windows only, no install needed
+#   tkinter   – stdlib (included with standard Python on Windows)
+#   All other imports are stdlib (queue, threading, logging, json, etc.)
+#
+# Install:
+#   pip install -r requirements.txt

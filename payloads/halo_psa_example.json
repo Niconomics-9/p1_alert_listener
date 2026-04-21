@@ -1,0 +1,23 @@
+{
+  "_description": "HaloPSA-style webhook payload. Field mappings in parser.py handle these automatically.",
+  "_halopsa_notes": [
+    "HaloPSA uses 'id' for the ticket number, 'ref' for the display reference",
+    "'priority_id' = 1 maps to P1. 'priority_name' contains 'P1 - Critical'",
+    "'client_name' is the client/customer field",
+    "'team' is the assigned team",
+    "'summary' is the ticket title/subject"
+  ],
+  "id": 48291,
+  "ref": "INC-48291",
+  "summary": "Critical: Core switch stack failure – site 3 offline",
+  "client_name": "Gamma Industries",
+  "priority_id": 1,
+  "priority_name": "P1 - Critical",
+  "severity": "critical",
+  "team": "Network Engineering",
+  "dateoccurred": "2024-04-21T08:30:00Z",
+  "status": "New",
+  "site_name": "Gamma Industries – Site 3",
+  "agent_name": "John Smith",
+  "source": "HaloPSA"
+}
