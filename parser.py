@@ -23,6 +23,9 @@ log = logging.getLogger("p1alert.parser")
 CRITICAL_IMPACT_VALUES = {"1", "highest", "critical", "high"}
 CRITICAL_URGENCY_VALUES = {"1", "highest", "critical", "high"}
 
+# Datto RMM priority values that map to P1
+DATTO_CRITICAL_PRIORITIES = {"critical", "high"}
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -82,6 +85,18 @@ def is_p1_alert(payload: dict[str, Any]) -> bool:
         log.debug(f"MATCH: urgency is critical → {urgency!r}")
         return True
 
+    # ── Rule 7: Datto RMM priority field ─────────────────────────────────
+    # Datto sends priority as "Critical", "High", "Moderate", "Low"
+    datto_priority = str(payload.get("priority", "")).strip().lower()
+    if datto_priority in DATTO_CRITICAL_PRIORITIES:
+        log.debug(f"MATCH: Datto priority is critical → {datto_priority!r}")
+        return True
+
+    # ── Rule 8: Datto alertTypeId 1003 = device offline (always critical) ─
+    if str(payload.get("alertTypeId", "")) == "1003":
+        log.debug("MATCH: Datto alertTypeId 1003 (device offline)")
+        return True
+
     log.debug("NO MATCH: payload is not P1/critical")
     return False
 
@@ -111,27 +126,48 @@ def extract_alert_fields(payload: dict[str, Any]) -> dict[str, Any]:
         return default
 
     ticket_id = _first(
+        # Generic / Halo
         "ticket_id", "id", "ref", "incident_id",
         "ticketId", "number", "ticket_number",
+        # Datto RMM
+        "alertUid",
         default="Unknown Ticket",
     )
 
     client = _first(
+        # Generic / Halo
         "client", "client_name", "customer", "organization",
         "account", "tenant", "company",
+        # Datto RMM
+        "siteName",
         default="Unknown Client",
     )
 
+    # For Datto: combine alertMessage + hostname for a useful summary
+    datto_message = payload.get("alertMessage", "")
+    datto_host = payload.get("hostname", "")
+    datto_summary = (
+        f"{datto_message} [{datto_host}]"
+        if datto_message and datto_host
+        else datto_message or datto_host
+    )
+    if datto_summary and not any(payload.get(k) for k in ("summary", "title", "subject", "description", "message", "short_description")):
+        payload = {**payload, "_datto_summary": datto_summary}
+
     summary = _first(
+        # Generic / Halo
         "summary", "title", "subject", "description",
         "message", "short_description",
+        # Datto RMM (synthesised above)
+        "_datto_summary",
         default="No summary provided",
     )
 
     source = _first(
+        # Generic / Halo
         "source", "system", "integration", "source_system",
         "origin", "tool",
-        default="Unknown Source",
+        default="Datto RMM" if payload.get("alertUid") else "Unknown Source",
     )
 
     priority = _first(
@@ -139,9 +175,15 @@ def extract_alert_fields(payload: dict[str, Any]) -> dict[str, Any]:
         default="P1",
     )
 
-    severity = _first("severity", "impact_name", default="")
+    severity = _first(
+        "severity", "impact_name",
+        # Datto: map priority → severity display
+        "priority",
+        default="",
+    )
 
     assigned_team = _first(
+        # Generic / Halo
         "assigned_team", "team", "assignment_group",
         "assignee_team", "group",
         default="",
@@ -149,7 +191,9 @@ def extract_alert_fields(payload: dict[str, Any]) -> dict[str, Any]:
 
     created_time = _first(
         "created_time", "created_at", "dateoccurred",
-        "opened_at", "created", "timestamp",
+        "opened_at", "created",
+        # Datto RMM
+        "timestamp",
         default="",
     )
 
