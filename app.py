@@ -108,6 +108,20 @@ def _start_listener(state: AppState) -> None:
     log.info("Status poller thread started")
     ServicePollerThread(state).start()
     log.info("Service poller thread started")
+    _open_board_in_browser(state)
+
+
+def _open_board_in_browser(state: AppState) -> None:
+    """Open the NOC board in the default browser ~2.5s after startup."""
+    import threading, time, webbrowser
+
+    def _open():
+        time.sleep(2.5)
+        port = state.settings.get("port", config.DEFAULT_PORT)
+        webbrowser.open(f"http://127.0.0.1:{port}/board")
+        log.info("NOC board opened in browser")
+
+    threading.Thread(target=_open, daemon=True).start()
 
 
 def _shutdown(state: AppState) -> None:

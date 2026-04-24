@@ -467,6 +467,10 @@ class Dashboard:
             self._refresh_halo_tickets(data or [])
         elif kind == MSG_OUTAGE_UPDATE:
             self._refresh_outage_banner(data or [])
+        elif kind == "open_alert_request":
+            self._open_alert_window()
+        elif kind == "restart_listener":
+            self._do_restart_listener()
 
     def _handle_new_alert(self, alert: Alert) -> None:
         self._refresh_all()
