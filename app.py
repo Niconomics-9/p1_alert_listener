@@ -75,7 +75,10 @@ def run() -> None:
 
     # ── 4. Dashboard ──────────────────────────────────────────────────────────
     dashboard = Dashboard(root, state)
+    # Start minimised – the web board is the main UI.
+    # The Tkinter window stays alive for P1 alert popups and sound.
     root.deiconify()
+    root.after(50, root.iconify)
 
     # ── 5. System tray (optional) ─────────────────────────────────────────────
     _try_init_tray(root, state)
@@ -116,7 +119,7 @@ def _open_board_in_browser(state: AppState) -> None:
     import threading, time, webbrowser
 
     def _open():
-        time.sleep(2.5)
+        time.sleep(1.5)
         port = state.settings.get("port", config.DEFAULT_PORT)
         webbrowser.open(f"http://127.0.0.1:{port}/board")
         log.info("NOC board opened in browser")
