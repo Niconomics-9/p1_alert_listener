@@ -1,9 +1,16 @@
 """
 dashboard.py – Main Tkinter dashboard window.
 
-All GUI operations run on the Tkinter main thread.
-Communicates with the listener via AppState.alert_queue (queue.Queue).
-Polls the queue every POLL_INTERVAL_MS milliseconds using root.after().
+Layout
+------
+  Top bar      – hamburger (☰), brand, status pills, uptime
+  Outage banner – amber strip when external outages detected (hidden when none)
+  Body         – [animated side menu] | [cards area + log drawer]
+  Status bar   – status text, host:port, by Niconomics
+
+Side menu slides in/out via smooth width animation (☰ toggle in top bar).
+Cards area splits: left (active alert, P1 queue, history) | right (Halo tickets).
+Active/queue use grid within their row for proportional resize.
 """
 from __future__ import annotations
 
@@ -29,29 +36,33 @@ log = logging.getLogger("p1alert.dashboard")
 
 POLL_INTERVAL_MS = 150
 LOG_MAX_LINES    = 500
+MENU_WIDTH       = 210    # px when fully open
+MENU_ANIM_STEP   = 24     # px per animation frame
+MENU_ANIM_MS     = 12     # ms between frames
 
-# ── Design tokens ────────────────────────────────────────────────────────────
-FONT_UI    = ("Segoe UI", 10)
-FONT_UI_SB = ("Segoe UI Semibold", 10)
-FONT_TITLE = ("Segoe UI", 18, "bold")
-FONT_MONO  = ("Consolas", 10)
-FONT_MONO_SM = ("Consolas", 9)
+# ── Design tokens ─────────────────────────────────────────────────────────────
+FONT_TITLE   = ("Segoe UI", 17, "bold")
+FONT_UI      = ("Segoe UI", 10)
 FONT_LABEL   = ("Segoe UI", 9)
+FONT_MONO    = ("Consolas", 10)
+FONT_MONO_SM = ("Consolas", 9)
 
-BG_SURFACE  = "#1E1E2E"   # base background
-BG_CARD     = "#242436"   # card background
-BG_DEEP     = "#11111B"   # top/bottom bars
-BG_INPUT    = "#313244"   # entry fields
-BG_TOOLBAR  = "#181825"   # toolbar strip
+BG_SURFACE  = "#1E1E2E"
+BG_CARD     = "#242436"
+BG_DEEP     = "#11111B"
+BG_INPUT    = "#313244"
+BG_MENU     = "#181825"
+BG_MENU_BTN = "#1E1E30"
 
-BTN_PRIMARY  = "#4C9BE8"  # blue action
-BTN_DANGER   = "#F38BA8"  # red
-BTN_SUCCESS  = "#A6E3A1"  # green
-BTN_MUTED    = "#313244"  # neutral
-BTN_WARN     = "#F9E2AF"  # amber
+BTN_PRIMARY = "#4C9BE8"
+BTN_SUCCESS = "#A6E3A1"
+BTN_WARN    = "#F9E2AF"
+BTN_MUTED   = "#313244"
+BTN_RED     = "#442233"
 
-ACCENT_RED  = "#F38BA8"
-ACCENT_BLUE = "#89B4FA"
+ACCENT_RED   = "#F38BA8"
+ACCENT_BLUE  = "#89B4FA"
+ACCENT_AMBER = "#F9E2AF"
 
 
 class Dashboard:
@@ -63,57 +74,59 @@ class Dashboard:
         self._alert_window: AlertWindow | None = None
         self._uptime_job: str | None = None
         self._log_visible = True
+        self._menu_open = False
+        self._menu_anim_id: str | None = None
 
         self._build_window()
         self._schedule_poll()
         self._schedule_uptime()
         log.info("Dashboard initialised")
 
-    # ------------------------------------------------------------------ build
+    # ──────────────────────────────────────────────── window skeleton
 
     def _build_window(self) -> None:
         r = self.root
         r.title(config.APP_TITLE)
         r.configure(bg=BG_SURFACE)
-        r.geometry("1400x760")
-        r.minsize(1100, 600)
+        r.geometry("1400x800")
+        r.minsize(1000, 600)
         r.protocol("WM_DELETE_WINDOW", self._on_close)
 
+        # Status bar must be packed before body so it claims BOTTOM first
+        self._build_status_bar()
         self._build_top_bar()
         self._build_outage_banner()
-        self._build_toolbar()
-        self._build_cards_area()
-        self._build_log_drawer()
-        self._build_status_bar()
+        self._build_body()
 
-    # ── Top bar ───────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────── top bar
 
     def _build_top_bar(self) -> None:
-        bar = tk.Frame(self.root, bg=BG_DEEP, height=54)
+        bar = tk.Frame(self.root, bg=BG_DEEP, height=52)
         bar.pack(fill=tk.X)
         bar.pack_propagate(False)
         self._top_bar = bar
 
-        # Brand
-        brand = tk.Frame(bar, bg=BG_DEEP)
-        brand.pack(side=tk.LEFT, padx=20, pady=0)
-        tk.Label(brand, text="⚡ NetWatch", font=FONT_TITLE,
-                 fg=ACCENT_BLUE, bg=BG_DEEP).pack(side=tk.LEFT)
+        # Hamburger toggle
+        ham = tk.Label(bar, text="☰", font=("Segoe UI", 18),
+                       fg=ACCENT_BLUE, bg=BG_DEEP, cursor="hand2", padx=14)
+        ham.pack(side=tk.LEFT)
+        ham.bind("<Button-1>", lambda e: self._toggle_menu())
+        _hover(ham, BG_DEEP, "#252540")
 
-        # Right side
+        tk.Label(bar, text="⚡ NetWatch", font=FONT_TITLE,
+                 fg=ACCENT_BLUE, bg=BG_DEEP).pack(side=tk.LEFT, padx=(0, 16))
+
+        # Right: uptime + pills
         right = tk.Frame(bar, bg=BG_DEEP)
         right.pack(side=tk.RIGHT, padx=16)
-
         self._uptime_lbl = tk.Label(right, text="00:00:00",
                                      font=("Segoe UI", 9), fg=config.COLOR_MUTED, bg=BG_DEEP)
-        self._uptime_lbl.pack(side=tk.RIGHT, padx=(12, 0))
+        self._uptime_lbl.pack(side=tk.RIGHT, padx=(8, 0))
         tk.Label(right, text="Uptime", font=("Segoe UI", 8),
                  fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.RIGHT)
 
-        # Status pills
         pills = tk.Frame(bar, bg=BG_DEEP)
-        pills.pack(side=tk.RIGHT, padx=12)
-
+        pills.pack(side=tk.RIGHT, padx=8)
         self._pill_listener = _Pill(pills, "Listener", "STOPPED", config.COLOR_ERR)
         self._pill_listener.pack(side=tk.LEFT, padx=3)
         self._pill_sound = _Pill(pills, "Sound", "ON", config.COLOR_OK)
@@ -123,24 +136,24 @@ class Dashboard:
         self._pill_queued = _Pill(pills, "Queued", "0", config.COLOR_MUTED)
         self._pill_queued.pack(side=tk.LEFT, padx=3)
 
-    # ── Outage banner ─────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────── outage banner
 
     def _build_outage_banner(self) -> None:
-        """Amber strip that appears between top bar and toolbar when outages exist."""
+        """Amber strip between top bar and body; hidden until outages exist."""
         self._outage_banner = tk.Frame(self.root, bg="#5C4000", height=28)
         self._outage_banner.pack_propagate(False)
-        # Not packed yet — shown on demand after _top_bar
+        # Not packed initially — inserted via pack(after=_top_bar) when needed
         self._outage_lbl = tk.Label(
             self._outage_banner, text="",
             font=("Segoe UI", 9, "bold"), fg="#FFF3CD", bg="#5C4000",
         )
         self._outage_lbl.pack(side=tk.LEFT, padx=12)
-        self._outage_dismiss = tk.Label(
+        dismiss = tk.Label(
             self._outage_banner, text="✕", font=("Segoe UI", 9),
             fg="#FFF3CD", bg="#5C4000", cursor="hand2",
         )
-        self._outage_dismiss.pack(side=tk.RIGHT, padx=12)
-        self._outage_dismiss.bind("<Button-1>", lambda e: self._hide_outage_banner())
+        dismiss.pack(side=tk.RIGHT, padx=12)
+        dismiss.bind("<Button-1>", lambda e: self._hide_outage_banner())
         self._outage_banner_visible = False
 
     def _show_outage_banner(self, text: str) -> None:
@@ -162,78 +175,142 @@ class Dashboard:
         services = ", ".join(o.service for o in active[:3])
         if len(active) > 3:
             services += f" +{len(active) - 3} more"
-        label = f"⚠  {len(active)} ACTIVE OUTAGE{'S' if len(active) > 1 else ''}  —  {services}"
-        self._show_outage_banner(label)
-
-    # ── Toolbar ───────────────────────────────────────────────────────────────
-
-    def _build_toolbar(self) -> None:
-        bar = tk.Frame(self.root, bg=BG_TOOLBAR, height=48)
-        bar.pack(fill=tk.X)
-        bar.pack_propagate(False)
-
-        left = tk.Frame(bar, bg=BG_TOOLBAR)
-        left.pack(side=tk.LEFT, padx=12, pady=8)
-
-        # Primary actions
-        self._tb_btn(left, "↺  Restart",    self._do_restart_listener, BTN_MUTED)
-        self._tb_sep(left)
-        self._tb_btn(left, "🧪  Test Alert", self._do_test_alert,       BTN_PRIMARY)
-        self._tb_btn(left, "🖥  Open Alert", self._do_open_alert,        BTN_WARN,   fg="#11111B")
-        self._tb_btn(left, "🔇  Silence",    self._do_silence,           BTN_MUTED)
-        self._tb_btn(left, "✔  Acknowledge",self._do_acknowledge,        BTN_SUCCESS, fg="#11111B")
-
-        right = tk.Frame(bar, bg=BG_TOOLBAR)
-        right.pack(side=tk.RIGHT, padx=12, pady=8)
-
-        self._tb_btn(right, "⚙  Settings",  self._do_settings,    BTN_MUTED)
-        self._tb_btn(right, "🔊  Sound",     self._do_test_sound,  BTN_MUTED)
-        self._tb_btn(right, "📁  Logs",      self._do_open_logs,   BTN_MUTED)
-        self._tb_btn(right, "📋  Copy JSON", self._do_copy_json,   BTN_MUTED)
-        self._tb_btn(right, "🗑  Clear",     self._do_clear_history, "#442222", fg="#FFAAAA")
-
-    def _tb_btn(self, parent, label, cmd, bg, fg="white"):
-        btn = tk.Label(
-            parent, text=label, font=("Segoe UI", 9, "bold"),
-            fg=fg, bg=bg, padx=12, pady=4,
-            cursor="hand2", relief=tk.FLAT,
+        self._show_outage_banner(
+            f"⚠  {len(active)} ACTIVE OUTAGE{'S' if len(active) > 1 else ''}  —  {services}"
         )
-        btn.pack(side=tk.LEFT, padx=3)
+
+    # ──────────────────────────────────────────────── body (side menu + content)
+
+    def _build_body(self) -> None:
+        self._body = tk.Frame(self.root, bg=BG_SURFACE)
+        self._body.pack(fill=tk.BOTH, expand=True)
+
+        # Side menu — width=0 at start; pack_propagate=False lets animation work
+        self._side_frame = tk.Frame(self._body, bg=BG_MENU, width=0)
+        self._side_frame.pack(side=tk.LEFT, fill=tk.Y)
+        self._side_frame.pack_propagate(False)
+        self._build_side_menu()
+
+        # Content pane — fills all remaining space and reflows on resize
+        content = tk.Frame(self._body, bg=BG_SURFACE)
+        content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self._build_cards(content)
+        self._build_log_drawer(content)
+
+    # ──────────────────────────────────────────────── side menu
+
+    def _build_side_menu(self) -> None:
+        m = self._side_frame
+        tk.Frame(m, bg=ACCENT_BLUE, height=2).pack(fill=tk.X)
+
+        # Scrollable canvas so menu works on short windows
+        canvas = tk.Canvas(m, bg=BG_MENU, highlightthickness=0, bd=0)
+        canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        inner = tk.Frame(canvas, bg=BG_MENU)
+        cwin = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(cwin, width=e.width))
+        canvas.bind_all("<MouseWheel>",
+                        lambda e: canvas.yview_scroll(int(-1 * e.delta / 120), "units"))
+
+        pad = dict(padx=10, pady=2)
+
+        self._menu_section(inner, "ALERT ACTIONS")
+        self._menu_btn(inner, "🧪  Test Alert",      self._do_test_alert,       BTN_PRIMARY,             **pad)
+        self._menu_btn(inner, "🖥  Open Alert",       self._do_open_alert,       BTN_MUTED,               **pad)
+        self._menu_btn(inner, "🔇  Silence",          self._do_silence,          BTN_MUTED,               **pad)
+        self._menu_btn(inner, "✔  Acknowledge",      self._do_acknowledge,      BTN_SUCCESS, fg="#11111B", **pad)
+
+        self._menu_divider(inner)
+
+        self._menu_section(inner, "LISTENER")
+        self._menu_btn(inner, "↺  Restart Listener", self._do_restart_listener, BTN_MUTED,               **pad)
+
+        self._menu_divider(inner)
+
+        self._menu_section(inner, "HISTORY")
+        self._menu_btn(inner, "📋  Copy Last JSON",   self._do_copy_json,        BTN_MUTED,               **pad)
+        self._menu_btn(inner, "🗑  Clear History",    self._do_clear_history,    BTN_RED,    fg="#FFAAAA", **pad)
+
+        self._menu_divider(inner)
+
+        self._menu_section(inner, "APP")
+        self._menu_btn(inner, "⚙  Settings",         self._do_settings,         BTN_MUTED,               **pad)
+        self._menu_btn(inner, "🔊  Test Sound",       self._do_test_sound,       BTN_MUTED,               **pad)
+        self._menu_btn(inner, "📁  Open Logs",        self._do_open_logs,        BTN_MUTED,               **pad)
+
+    def _menu_section(self, parent, title: str) -> None:
+        tk.Label(parent, text=title, font=("Segoe UI", 7, "bold"),
+                 fg=config.COLOR_MUTED, bg=BG_MENU,
+                 anchor="w").pack(fill=tk.X, padx=12, pady=(12, 2))
+
+    def _menu_divider(self, parent) -> None:
+        tk.Frame(parent, bg="#2A2A40", height=1).pack(fill=tk.X, padx=10, pady=6)
+
+    def _menu_btn(self, parent, label, cmd, bg, fg="white", **kw):
+        btn = tk.Label(parent, text=label, font=("Segoe UI", 10),
+                       fg=fg, bg=bg, anchor="w", padx=14, pady=7, cursor="hand2")
+        btn.pack(fill=tk.X, **kw)
         btn.bind("<Button-1>", lambda e: cmd())
         _hover(btn, bg, _lighten(bg))
 
-    def _tb_sep(self, parent):
-        tk.Frame(parent, bg="#313244", width=1, height=28).pack(side=tk.LEFT, padx=6)
+    # ──────────────────────────────────────────────── menu animation
 
-    # ── Cards area ────────────────────────────────────────────────────────────
+    def _toggle_menu(self) -> None:
+        if self._menu_anim_id:
+            self.root.after_cancel(self._menu_anim_id)
+            self._menu_anim_id = None
+        self._animate_menu(0 if self._menu_open else MENU_WIDTH)
 
-    def _build_cards_area(self) -> None:
-        area = tk.Frame(self.root, bg=BG_SURFACE)
-        area.pack(fill=tk.BOTH, expand=True, padx=12, pady=(10, 0))
+    def _animate_menu(self, target: int) -> None:
+        current = self._side_frame.winfo_width()
+        if current == target:
+            self._menu_open = target > 0
+            self._menu_anim_id = None
+            return
+        step = MENU_ANIM_STEP if target > current else -MENU_ANIM_STEP
+        new_w = current + step
+        if (step > 0 and new_w >= target) or (step < 0 and new_w <= target):
+            new_w = target
+        self._side_frame.configure(width=new_w)
+        if new_w != target:
+            self._menu_anim_id = self.root.after(MENU_ANIM_MS, lambda: self._animate_menu(target))
+        else:
+            self._menu_open = target > 0
+            self._menu_anim_id = None
 
-        # Horizontal split: left (main) + right (Halo tickets)
+    # ──────────────────────────────────────────────── cards
+
+    def _build_cards(self, parent: tk.Frame) -> None:
+        area = tk.Frame(parent, bg=BG_SURFACE)
+        area.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 0))
+
+        # Horizontal split: left (main) | right (Halo queue)
         split = tk.Frame(area, bg=BG_SURFACE)
         split.pack(fill=tk.BOTH, expand=True)
 
-        # Right panel packed first so it doesn't steal expand space
-        self._build_halo_panel(split)
+        self._build_halo_panel(split)   # right — packed first, fixed width
 
         left = tk.Frame(split, bg=BG_SURFACE)
         left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        # Top row: Active Alert + P1 Queue side by side
+        # Top row — grid so active + queue resize proportionally
         top_row = tk.Frame(left, bg=BG_SURFACE)
-        top_row.pack(fill=tk.BOTH, expand=False)
+        top_row.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        top_row.columnconfigure(0, weight=3)
+        top_row.columnconfigure(1, weight=2)
+        top_row.rowconfigure(0, weight=1)
 
         self._build_active_card(top_row)
         self._build_queue_card(top_row)
-
-        # Bottom: History full width (within left column)
         self._build_history_card(left)
 
-    def _build_active_card(self, parent) -> None:
-        outer = _Card(parent, "ACTIVE ALERT", accent=ACCENT_RED)
-        outer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 6), pady=(0, 8))
+    def _build_active_card(self, parent: tk.Frame) -> None:
+        outer = _Card(parent, "ACTIVE ALERT", accent=ACCENT_BLUE)
+        outer.grid(row=0, column=0, sticky="nsew", padx=(0, 5))
+        self._active_card = outer
 
         self._active_text = scrolledtext.ScrolledText(
             outer.body, bg=BG_SURFACE, fg=config.DASH_FG,
@@ -241,11 +318,10 @@ class Dashboard:
             height=9, wrap=tk.WORD, bd=0,
         )
         self._active_text.pack(fill=tk.BOTH, expand=True)
-        self._active_card = outer
 
-    def _build_queue_card(self, parent) -> None:
-        outer = _Card(parent, "QUEUE", accent=BTN_WARN)
-        outer.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0), pady=(0, 8))
+    def _build_queue_card(self, parent: tk.Frame) -> None:
+        outer = _Card(parent, "QUEUE", accent=ACCENT_AMBER)
+        outer.grid(row=0, column=1, sticky="nsew", padx=(5, 0))
 
         self._queued_list = tk.Listbox(
             outer.body, bg=BG_SURFACE, fg=config.DASH_FG,
@@ -279,24 +355,22 @@ class Dashboard:
         self._halo_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         sb.config(command=self._halo_list.yview)
 
-    def _build_history_card(self, parent) -> None:
+    def _build_history_card(self, parent: tk.Frame) -> None:
         outer = _Card(parent, "HISTORY", accent=ACCENT_BLUE)
-        outer.pack(fill=tk.BOTH, expand=True, pady=(0, 8))
+        outer.pack(fill=tk.BOTH, expand=True, pady=(0, 6))
 
-        # Filter row inside card header area
-        filter_row = tk.Frame(outer.header_frame, bg=BG_CARD)
-        filter_row.pack(side=tk.RIGHT, padx=8)
-        tk.Label(filter_row, text="Filter:", font=FONT_LABEL,
+        fr = tk.Frame(outer.header_frame, bg=BG_CARD)
+        fr.pack(side=tk.RIGHT, padx=6)
+        tk.Label(fr, text="Filter:", font=FONT_LABEL,
                  fg=config.COLOR_MUTED, bg=BG_CARD).pack(side=tk.LEFT)
         self._filter_var = tk.StringVar()
         self._filter_var.trace_add("write", lambda *_: self._refresh_history())
-        tk.Entry(filter_row, textvariable=self._filter_var,
+        tk.Entry(fr, textvariable=self._filter_var,
                  bg=BG_INPUT, fg=config.DASH_FG,
                  insertbackground=config.DASH_FG,
-                 relief=tk.FLAT, font=FONT_MONO_SM, width=28,
+                 relief=tk.FLAT, font=FONT_MONO_SM, width=26,
                  ).pack(side=tk.LEFT, padx=(4, 0))
 
-        # Listbox with scrollbar
         inner = tk.Frame(outer.body, bg=BG_SURFACE)
         inner.pack(fill=tk.BOTH, expand=True)
         sb = tk.Scrollbar(inner, bg=BG_SURFACE, troughcolor=BG_SURFACE)
@@ -310,30 +384,29 @@ class Dashboard:
         sb.config(command=self._hist_list.yview)
         self._hist_list.bind("<Double-Button-1>", self._on_history_double_click)
 
-    # ── Log drawer ────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────── log drawer
 
-    def _build_log_drawer(self) -> None:
-        self._log_frame = tk.Frame(self.root, bg=BG_DEEP)
-        self._log_frame.pack(fill=tk.X, padx=12, pady=(0, 4))
+    def _build_log_drawer(self, parent: tk.Frame) -> None:
+        self._log_outer = tk.Frame(parent, bg=BG_DEEP)
+        self._log_outer.pack(fill=tk.X, padx=10, pady=(0, 6))
 
-        # Header row
-        hdr = tk.Frame(self._log_frame, bg=BG_DEEP)
+        hdr = tk.Frame(self._log_outer, bg=BG_DEEP)
         hdr.pack(fill=tk.X)
         tk.Label(hdr, text="EVENT LOG", font=("Segoe UI", 8, "bold"),
-                 fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.LEFT, padx=8, pady=4)
+                 fg=config.COLOR_MUTED, bg=BG_DEEP).pack(side=tk.LEFT, padx=10, pady=5)
         self._log_toggle_lbl = tk.Label(hdr, text="▼ hide", font=FONT_LABEL,
                                          fg=ACCENT_BLUE, bg=BG_DEEP, cursor="hand2")
-        self._log_toggle_lbl.pack(side=tk.RIGHT, padx=8)
+        self._log_toggle_lbl.pack(side=tk.RIGHT, padx=10)
         self._log_toggle_lbl.bind("<Button-1>", lambda e: self._toggle_log())
 
-        self._log_body = tk.Frame(self._log_frame, bg=BG_DEEP)
+        self._log_body = tk.Frame(self._log_outer, bg=BG_DEEP)
         self._log_body.pack(fill=tk.X)
         self._log_text = scrolledtext.ScrolledText(
             self._log_body, bg=BG_DEEP, fg=config.DASH_LOG_FG,
             font=FONT_MONO_SM, relief=tk.FLAT, state=tk.DISABLED,
             height=6, wrap=tk.WORD, bd=0,
         )
-        self._log_text.pack(fill=tk.X, padx=8, pady=(0, 6))
+        self._log_text.pack(fill=tk.X, padx=10, pady=(0, 6))
 
     def _toggle_log(self) -> None:
         if self._log_visible:
@@ -344,7 +417,7 @@ class Dashboard:
             self._log_toggle_lbl.configure(text="▼ hide")
         self._log_visible = not self._log_visible
 
-    # ── Status bar ────────────────────────────────────────────────────────────
+    # ──────────────────────────────────────────────── status bar
 
     def _build_status_bar(self) -> None:
         bar = tk.Frame(self.root, bg=BG_DEEP, height=22)
@@ -360,7 +433,7 @@ class Dashboard:
                  font=FONT_LABEL, fg=config.COLOR_MUTED, bg=BG_DEEP,
                  ).pack(side=tk.RIGHT, padx=(10, 4))
 
-    # ------------------------------------------------------------------ queue polling
+    # ──────────────────────────────────────────────── queue polling
 
     def _schedule_poll(self) -> None:
         self.root.after(POLL_INTERVAL_MS, self._poll_queue)
@@ -369,8 +442,7 @@ class Dashboard:
         try:
             q = self.state.alert_queue
             while not q.empty():
-                msg = q.get_nowait()
-                self._dispatch(msg)
+                self._dispatch(q.get_nowait())
         except Exception as exc:
             log.error(f"Queue poll error: {exc}", exc_info=True)
         finally:
@@ -394,12 +466,9 @@ class Dashboard:
             self._refresh_halo_tickets(data or [])
         elif kind == MSG_OUTAGE_UPDATE:
             self._refresh_outage_banner(data or [])
-        else:
-            log.debug(f"Unknown queue msg kind: {kind!r}")
 
     def _handle_new_alert(self, alert: Alert) -> None:
         self._refresh_all()
-        # Red accent on active card
         self._active_card.set_accent(ACCENT_RED)
         if self.state.settings.get("auto_open_fullscreen", True):
             self._open_alert_window(alert)
@@ -407,9 +476,8 @@ class Dashboard:
             s = self.state.settings
             sound.start_alert_sound(s.get("sound_mode", "beep"), s.get("wav_path", ""))
         self._set_status(f"🚨 P1 ALERT: {alert.ticket_id}")
-        log.info(f"Dashboard handling alert: {alert.ticket_id}")
 
-    # ------------------------------------------------------------------ alert window
+    # ──────────────────────────────────────────────── alert window
 
     def _open_alert_window(self, alert: Alert | None = None) -> None:
         if alert is None:
@@ -417,7 +485,7 @@ class Dashboard:
         if alert is None:
             messagebox.showinfo("No Alert", "No active alert to display.", parent=self.root)
             return
-        if self._alert_window is not None:
+        if self._alert_window:
             try:
                 self._alert_window.destroy()
             except Exception:
@@ -426,8 +494,7 @@ class Dashboard:
         s = self.state.settings
         try:
             self._alert_window = AlertWindow(
-                root=self.root,
-                alert=alert,
+                root=self.root, alert=alert,
                 queue_count=self.state.queue_count(),
                 on_acknowledge=self._do_acknowledge,
                 on_silence=self._do_silence,
@@ -438,30 +505,25 @@ class Dashboard:
             )
         except Exception as exc:
             log.error(f"Failed to open alert window: {exc}", exc_info=True)
-            messagebox.showerror("Alert Error",
-                                 f"Could not open full-screen alert:\n{exc}",
-                                 parent=self.root)
+            messagebox.showerror("Alert Error", f"Could not open alert:\n{exc}", parent=self.root)
 
-    # ------------------------------------------------------------------ actions
+    # ──────────────────────────────────────────────── actions
 
     def _do_restart_listener(self) -> None:
-        """Stop the current listener thread and start a fresh one."""
         import threading
         def _restart():
             t = self.state.listener_thread
-            if t is not None and t.is_alive():
-                self.state.post("log", "↺ Restarting listener…")
+            if t and t.is_alive():
+                self.state.post("log", "↺ Stopping listener…")
                 try:
                     t.stop()
                     t.join(timeout=4)
                 except Exception as exc:
-                    log.warning(f"Listener stop error: {exc}")
-
+                    log.warning(f"Stop error: {exc}")
             from listener import ListenerThread
             new_t = ListenerThread(self.state)
             self.state.listener_thread = new_t
             new_t.start()
-
         threading.Thread(target=_restart, daemon=True).start()
         self._set_status("Restarting listener…")
 
@@ -470,16 +532,12 @@ class Dashboard:
         def _inject():
             from listener import _build_test_payload
             from parser import build_alert
-            payload = _build_test_payload()
-            alert = build_alert(payload)
+            alert = build_alert(_build_test_payload())
             alert.dedupe_key = f"test:{uuid.uuid4().hex[:8]}"
             placement = self.state.push_alert(alert)
-            if placement == "active":
-                self.state.post("alert", alert)
-                self.state.post("log", f"🚨 Test P1 ALERT: {alert.ticket_id}")
-            else:
-                self.state.post("queued_alert", alert)
-                self.state.post("log", f"📋 Test alert queued ({self.state.queue_count()})")
+            key = "alert" if placement == "active" else "queued_alert"
+            self.state.post(key, alert)
+            self.state.post("log", f"🧪 Test alert ({placement})")
         threading.Thread(target=_inject, daemon=True).start()
 
     def _do_open_alert(self) -> None:
@@ -489,19 +547,19 @@ class Dashboard:
         self.state.silence_active()
         if self.state.sound_silenced:
             sound.stop_alert_sound()
-            self._append_log("🔇 Alert silenced")
+            self._append_log("🔇 Silenced")
             self._pill_sound.set("MUTED", config.COLOR_MUTED)
         else:
             if self.state.active_alert:
                 s = self.state.settings
                 sound.start_alert_sound(s.get("sound_mode", "beep"), s.get("wav_path", ""))
-            self._append_log("🔊 Alert un-silenced")
+            self._append_log("🔊 Un-silenced")
             self._pill_sound.set("ON", config.COLOR_OK)
 
     def _do_acknowledge(self) -> None:
         old = self.state.acknowledge_active()
         if old is None:
-            self._append_log("ℹ️ No active alert to acknowledge")
+            self._append_log("ℹ️ No active alert")
             return
         sound.stop_alert_sound()
         self._append_log(f"✔ Acknowledged: {old.ticket_id}")
@@ -515,16 +573,15 @@ class Dashboard:
             self._open_alert_window(self.state.active_alert)
             s = self.state.settings
             sound.start_alert_sound(s.get("sound_mode", "beep"), s.get("wav_path", ""))
-        self._refresh_all()
         if not self.state.active_alert:
             self._active_card.set_accent(ACCENT_BLUE)
+        self._refresh_all()
         if self.state.settings.get("persist_history"):
             storage.save_history(self.state.history)
 
     def _do_next_alert(self) -> None:
         next_alert = self.state.next_queued()
         sound.stop_alert_sound()
-        self._append_log("⏭ Next alert")
         if self._alert_window:
             try:
                 self._alert_window.destroy()
@@ -556,14 +613,13 @@ class Dashboard:
         text = json.dumps(history[0].to_dict(), indent=2, ensure_ascii=False)
         self.root.clipboard_clear()
         self.root.clipboard_append(text)
-        self._append_log("📋 Latest alert JSON copied to clipboard")
+        self._append_log("📋 Copied last alert JSON")
 
     def _do_settings(self) -> None:
         def _on_save(new_settings):
             self.state.settings.update(new_settings)
             storage.save_settings(self.state.settings)
             self._append_log("⚙ Settings updated")
-            log.info("Settings updated from dialog")
         SettingsDialog(self.root, self.state.settings, _on_save)
 
     def _do_open_logs(self) -> None:
@@ -571,19 +627,19 @@ class Dashboard:
         try:
             os.startfile(str(config.LOGS_DIR))
         except Exception as exc:
-            messagebox.showinfo("Logs", f"Logs: {config.LOGS_DIR}\n\n{exc}", parent=self.root)
+            messagebox.showinfo("Logs", f"{config.LOGS_DIR}\n\n{exc}", parent=self.root)
 
     def _do_test_sound(self) -> None:
         s = self.state.settings
-        self._append_log("🔊 Playing test sound…")
         import threading
         threading.Thread(
             target=sound.test_sound,
             args=(s.get("sound_mode", "beep"), s.get("wav_path", "")),
             daemon=True,
         ).start()
+        self._append_log("🔊 Test sound playing…")
 
-    # ------------------------------------------------------------------ refresh
+    # ──────────────────────────────────────────────── refresh
 
     def _refresh_all(self) -> None:
         self._refresh_active()
@@ -601,7 +657,7 @@ class Dashboard:
         self._active_text.delete("1.0", tk.END)
         a = self.state.active_alert
         if a:
-            lines = [
+            rows = [
                 ("Ticket   ", a.ticket_id),
                 ("Client   ", a.client),
                 ("Summary  ", a.summary),
@@ -610,10 +666,10 @@ class Dashboard:
                 ("Team     ", a.assigned_team or "—"),
                 ("Received ", a.display_received()),
             ]
-            for label, val in lines:
-                self._active_text.insert(tk.END, label, "lbl")
+            for lbl, val in rows:
+                self._active_text.insert(tk.END, lbl, "dim")
                 self._active_text.insert(tk.END, f"  {val}\n")
-            self._active_text.tag_configure("lbl", foreground=config.COLOR_MUTED,
+            self._active_text.tag_configure("dim", foreground=config.COLOR_MUTED,
                                              font=("Segoe UI", 9))
         else:
             self._active_text.insert(tk.END, "\n  No active alert", "empty")
@@ -626,14 +682,14 @@ class Dashboard:
         with self.state._lock:
             for a in self.state.alert_queue_list:
                 self._queued_list.insert(
-                    tk.END, f"  {a.display_received()}  {a.ticket_id}  {a.client[:22]}")
+                    tk.END, f"  {a.display_received()}  {a.ticket_id}  {a.client[:20]}")
 
     def _refresh_history(self) -> None:
         self._hist_list.delete(0, tk.END)
         filt = self._filter_var.get().strip().lower()
         for a in self.state.get_recent_history(200):
             tag = _source_tag(a.source)
-            row = f"  {a.display_received()}  {tag}  {a.ticket_id}  {a.client[:22]}  {a.short_summary(42)}"
+            row = f"  {a.display_received()}  {tag}  {a.ticket_id}  {a.client[:20]}  {a.short_summary(40)}"
             if filt and filt not in row.lower():
                 continue
             self._hist_list.insert(tk.END, row)
@@ -648,59 +704,51 @@ class Dashboard:
             config.COLOR_MUTED if self.state.sound_silenced else config.COLOR_OK,
         )
         active = 1 if self.state.active_alert else 0
-        self._pill_active.set(str(active),
-                               config.COLOR_ERR if active else config.COLOR_MUTED)
+        self._pill_active.set(str(active), config.COLOR_ERR if active else config.COLOR_MUTED)
         q = self.state.queue_count()
         self._pill_queued.set(str(q), config.COLOR_WARN if q else config.COLOR_MUTED)
 
     def _refresh_halo_tickets(self, rows: list) -> None:
         self._halo_list.delete(0, tk.END)
-        self._halo_count_lbl.configure(
-            text=f"{len(rows)} open" if rows else "0 open"
-        )
+        self._halo_count_lbl.configure(text=f"{len(rows)} open" if rows else "0 open")
         for r in rows:
             if r.sla_remaining_minutes is None:
                 sla_str = "SLA:—   "
             elif r.sla_remaining_minutes < 0:
-                sla_str = f"SLA:OVR "
+                sla_str = "SLA:OVR "
             else:
                 h, m = divmod(r.sla_remaining_minutes, 60)
                 sla_str = f"SLA:{h:02d}h{m:02d}"
-            pri = (r.priority or "")[:4].ljust(4)
+            pri    = (r.priority or "")[:4].ljust(4)
             client = (r.client or "")[:18].ljust(18)
-            subj = (r.subject or "")[:26]
+            subj   = (r.subject or "")[:26]
             self._halo_list.insert(tk.END, f" {sla_str}  {pri}  {client}  {subj}")
-            # Colour overdue rows
             if r.sla_remaining_minutes is not None and r.sla_remaining_minutes < 0:
                 self._halo_list.itemconfig(tk.END, fg=config.COLOR_ERR)
             elif r.sla_remaining_minutes is not None and r.sla_remaining_minutes < 60:
                 self._halo_list.itemconfig(tk.END, fg=config.COLOR_WARN)
 
-    # ------------------------------------------------------------------ log
+    # ──────────────────────────────────────────────── log
 
     def _append_log(self, message: str) -> None:
-        ts = now_display()
         self._log_text.configure(state=tk.NORMAL)
-        self._log_text.insert(tk.END, f"[{ts}]  {message}\n")
+        self._log_text.insert(tk.END, f"[{now_display()}]  {message}\n")
         lines = int(self._log_text.index(tk.END).split(".")[0])
         if lines > LOG_MAX_LINES:
             self._log_text.delete("1.0", f"{lines - LOG_MAX_LINES}.0")
         self._log_text.see(tk.END)
         self._log_text.configure(state=tk.DISABLED)
 
-    # ------------------------------------------------------------------ misc
+    # ──────────────────────────────────────────────── misc
 
     def _set_status(self, text: str) -> None:
         self._status_lbl.configure(text=text)
 
     def _on_listener_status(self, running: bool) -> None:
         self._refresh_pills()
-        if running:
-            self._set_status("Listener running")
-            self._append_log("🟢 Listener is running")
-        else:
-            self._set_status("Listener stopped")
-            self._append_log("🔴 Listener stopped")
+        status = "Listener running" if running else "Listener stopped"
+        self._set_status(status)
+        self._append_log(f"{'🟢' if running else '🔴'} {status}")
 
     def _schedule_uptime(self) -> None:
         self._uptime_job = self.root.after(1000, self._tick_uptime)
@@ -734,24 +782,19 @@ class Dashboard:
             self.root.destroy()
 
 
-# ---------------------------------------------------------------------------
-# Widgets
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────── widgets
 
 class _Card(tk.Frame):
-    """A card with a coloured top accent bar, title, and body area."""
+    """Card with a coloured top accent bar, small-caps title, and body."""
 
     def __init__(self, parent, title: str, accent: str = ACCENT_BLUE) -> None:
-        super().__init__(parent, bg=BG_CARD, padx=0, pady=0)
+        super().__init__(parent, bg=BG_CARD)
         self._accent_bar = tk.Frame(self, bg=accent, height=3)
         self._accent_bar.pack(fill=tk.X)
-
         self.header_frame = tk.Frame(self, bg=BG_CARD)
-        self.header_frame.pack(fill=tk.X, padx=10, pady=(6, 4))
-        tk.Label(self.header_frame, text=title,
-                 font=("Segoe UI", 8, "bold"),
+        self.header_frame.pack(fill=tk.X, padx=10, pady=(5, 3))
+        tk.Label(self.header_frame, text=title, font=("Segoe UI", 8, "bold"),
                  fg=config.COLOR_MUTED, bg=BG_CARD).pack(side=tk.LEFT)
-
         self.body = tk.Frame(self, bg=BG_SURFACE)
         self.body.pack(fill=tk.BOTH, expand=True, padx=8, pady=(0, 8))
 
@@ -760,8 +803,6 @@ class _Card(tk.Frame):
 
 
 class _Pill(tk.Frame):
-    """Compact status indicator."""
-
     def __init__(self, parent, name: str, value: str, color: str) -> None:
         super().__init__(parent, bg=BG_DEEP)
         tk.Label(self, text=name, font=("Segoe UI", 7),
@@ -774,9 +815,7 @@ class _Pill(tk.Frame):
         self._lbl.configure(text=value, bg=color)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ─────────────────────────────────────────────────────────────── helpers
 
 def _hover(widget, off: str, on: str) -> None:
     widget.bind("<Enter>", lambda e: widget.configure(bg=on))
@@ -784,22 +823,16 @@ def _hover(widget, off: str, on: str) -> None:
 
 
 def _lighten(hex_color: str) -> str:
-    """Return a slightly lighter version of a hex colour for hover."""
     try:
         h = hex_color.lstrip("#")
         r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-        r = min(255, r + 30)
-        g = min(255, g + 30)
-        b = min(255, b + 30)
-        return f"#{r:02x}{g:02x}{b:02x}"
+        return f"#{min(255,r+28):02x}{min(255,g+28):02x}{min(255,b+28):02x}"
     except Exception:
         return hex_color
 
 
 def _source_tag(source: str) -> str:
     s = (source or "").lower()
-    if "halo" in s:
-        return "[HALO ]"
-    if "datto" in s:
-        return "[DATTO]"
+    if "halo" in s:  return "[HALO ]"
+    if "datto" in s: return "[DATTO]"
     return "[OTHER]"
