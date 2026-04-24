@@ -6,8 +6,8 @@ Responsibilities:
   2. Load persisted settings + history
   3. Build the Tkinter root window
   4. Create AppState
-  5. Create Dashboard
-  6. Start the listener thread
+  5. Create Dashboard (starts minimised — web board is the main UI)
+  6. Start background threads and open /board in browser
   7. Run the Tkinter mainloop
   8. Graceful shutdown on exit
 
@@ -21,7 +21,6 @@ from __future__ import annotations
 import logging
 import sys
 import tkinter as tk
-from pathlib import Path
 
 import config
 import storage
@@ -48,45 +47,38 @@ def run() -> None:
     # ── 2. State ──────────────────────────────────────────────────────────────
     state = AppState()
 
-    # Load persisted settings and merge over defaults
     saved_settings = storage.load_settings()
     if saved_settings:
         state.settings.update(saved_settings)
         log.info(f"Loaded {len(saved_settings)} settings from disk")
 
-    # Load history
     if state.settings.get("persist_history", True):
         state.history = storage.load_history()
 
-    # Re-init logging with possibly-custom log file from saved settings
+    # Re-init logging if a custom log path was saved in settings
     log_file = state.settings.get("log_file", config.DEFAULT_LOG_FILE)
     if log_file != config.DEFAULT_LOG_FILE:
-        # Re-configure with the custom path
         logger = logging.getLogger("p1alert")
         logger.handlers.clear()
         utils.setup_logging(log_file)
 
     # ── 3. Tkinter root ───────────────────────────────────────────────────────
     root = tk.Tk()
-    root.withdraw()  # Hide until dashboard is built
+    root.withdraw()
 
-    # Set taskbar icon (best-effort – needs .ico on Windows)
     _set_icon(root)
 
     # ── 4. Dashboard ──────────────────────────────────────────────────────────
     dashboard = Dashboard(root, state)
-    # Start minimised – the web board is the main UI.
-    # The Tkinter window stays alive for P1 alert popups and sound.
+    # Deiconify briefly then minimise — web board is the primary UI;
+    # Tkinter stays alive for full-screen P1 alert popups and sound.
     root.deiconify()
     root.after(50, root.iconify)
 
-    # ── 5. System tray (optional) ─────────────────────────────────────────────
-    _try_init_tray(root, state)
-
-    # ── 6. Auto-start listener ────────────────────────────────────────────────
+    # ── 5. Start background threads + open board in browser ───────────────────
     _start_listener(state)
 
-    # ── 7. Mainloop ───────────────────────────────────────────────────────────
+    # ── 6. Mainloop ───────────────────────────────────────────────────────────
     log.info("Entering Tkinter mainloop")
     try:
         root.mainloop()
@@ -115,7 +107,7 @@ def _start_listener(state: AppState) -> None:
 
 
 def _open_board_in_browser(state: AppState) -> None:
-    """Open the NOC board in the default browser ~2.5s after startup."""
+    """Open the NOC board in the default browser ~1.5s after startup."""
     import threading, time, webbrowser
 
     def _open():
@@ -144,79 +136,3 @@ def _set_icon(root: tk.Tk) -> None:
             root.iconbitmap(str(ico))
         except Exception:
             pass
-
-
-def _try_init_tray(root: tk.Tk, state: AppState) -> None:
-    """
-    Optional system tray support via pystray.
-
-    pystray is NOT in the default requirements because:
-      - It adds a dependency (pystray + Pillow)
-      - It requires a separate icon image
-      - For a dedicated alert monitor, tray minimisation is less critical
-
-    To enable: pip install pystray pillow
-    Then set ENABLE_TRAY = True below.
-
-    Tray menu options: Show Dashboard | Silence | Test Alert | Quit
-    """
-    ENABLE_TRAY = False  # Change to True after installing pystray + pillow
-
-    if not ENABLE_TRAY:
-        return
-
-    try:
-        import pystray
-        from PIL import Image, ImageDraw
-
-        # Create a simple red square icon
-        img = Image.new("RGB", (64, 64), color="#CC0000")
-        draw = ImageDraw.Draw(img)
-        draw.text((16, 20), "P1", fill="white")
-
-        def _show(icon, item):
-            root.after(0, root.deiconify)
-
-        def _silence(icon, item):
-            root.after(0, state.silence_active)
-
-        def _test(icon, item):
-            state.post("log", "🧪 Tray: test alert")
-            # Inject directly since we may not have a running listener
-            from listener import _build_test_payload
-            from parser import build_alert
-            alert = build_alert(_build_test_payload())
-            if not state.check_dedupe(alert):
-                placement = state.push_alert(alert)
-                state.post("alert" if placement == "active" else "queued_alert", alert)
-
-        def _quit(icon, item):
-            icon.stop()
-            root.after(0, root.destroy)
-
-        menu = pystray.Menu(
-            pystray.MenuItem("Show Dashboard", _show, default=True),
-            pystray.MenuItem("Silence Current", _silence),
-            pystray.MenuItem("Trigger Test Alert", _test),
-            pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Quit", _quit),
-        )
-
-        icon = pystray.Icon("P1Alert", img, config.APP_TITLE, menu)
-
-        # Minimise to tray
-        def _on_minimize(event):
-            if root.state() == "iconic":
-                root.withdraw()
-                icon.notify("NetWatch is running in the tray.")
-
-        root.bind("<Unmap>", _on_minimize)
-
-        import threading
-        threading.Thread(target=icon.run, daemon=True, name="TrayThread").start()
-        log.info("System tray icon started")
-
-    except ImportError:
-        log.debug("pystray not installed – tray disabled (pip install pystray pillow to enable)")
-    except Exception as exc:
-        log.warning(f"Tray init failed: {exc}")

@@ -155,16 +155,19 @@ class HaloPollerThread(threading.Thread):
 
         changed = False
         for tid, ev in list(self._outage_by_ticket.items()):
-            if tid not in matched_ids and not ev.resolved:  # type: ignore[attr-defined]
-                ev.resolved = True  # type: ignore[attr-defined]
+            if tid not in matched_ids and not ev.resolved:
+                ev.resolved = True
                 changed = True
             elif tid in matched_ids:
                 changed = True  # new entry already detected above
 
         if changed:
-            active = [ev for ev in self._outage_by_ticket.values() if not ev.resolved]  # type: ignore[attr-defined]
-            self._state.active_outages = list(active)
-            self._state.alert_queue.put(QueueMsg(kind=MSG_OUTAGE_UPDATE, data=list(active)))
+            active = [ev for ev in self._outage_by_ticket.values() if not ev.resolved]
+            # Preserve events from other sources (M365, AWS) written by status_poller
+            non_halo = [e for e in self._state.active_outages if e.source != "Halo"]
+            merged = non_halo + active
+            self._state.active_outages = merged
+            self._state.alert_queue.put(QueueMsg(kind=MSG_OUTAGE_UPDATE, data=merged))
 
 
 # ---------------------------------------------------------------------------
