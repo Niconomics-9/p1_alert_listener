@@ -27,8 +27,10 @@ import config
 import storage
 import utils
 from dashboard import Dashboard
+from halo_poller import HaloPollerThread
 from listener import ListenerThread
 from state import AppState
+from status_poller import StatusPollerThread
 
 log = logging.getLogger("p1alert.app")
 
@@ -99,6 +101,10 @@ def _start_listener(state: AppState) -> None:
     state.listener_thread = t
     t.start()
     log.info("Listener thread started")
+    HaloPollerThread(state).start()
+    log.info("Halo poller thread started")
+    StatusPollerThread(state).start()
+    log.info("Status poller thread started")
 
 
 def _shutdown(state: AppState) -> None:

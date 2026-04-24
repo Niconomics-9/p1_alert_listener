@@ -37,6 +37,10 @@ class AppState:
         self.listener_thread: threading.Thread | None = None
         self.listener_running: bool = False
 
+        # ── Halo / status panel data ──────────────────────────────────────
+        self.ticket_queue: list = []    # list[TicketRow]
+        self.active_outages: list = []  # list[OutageEvent]
+
         # ── Sound ─────────────────────────────────────────────────────────
         self.sound_playing: bool = False
         self.sound_silenced: bool = False  # Silenced for current alert session
@@ -70,6 +74,15 @@ class AppState:
             "persist_history": config.DEFAULT_PERSIST_HISTORY,
             "log_file": config.DEFAULT_LOG_FILE,
             "theme": "dark",
+            # Halo PSA poller
+            "halo_base_url": config.HALO_BASE_URL,
+            "halo_client_id": config.HALO_CLIENT_ID,
+            "halo_client_secret": config.HALO_CLIENT_SECRET,
+            "halo_poll_interval": config.HALO_POLL_INTERVAL,
+            "status_poll_interval": config.STATUS_POLL_INTERVAL,
+            "monitor_m365": config.MONITOR_M365,
+            "monitor_aws": config.MONITOR_AWS,
+            "outage_device_keywords": config.OUTAGE_DEVICE_KEYWORDS,
         }
 
     # ------------------------------------------------------------------ dedupe

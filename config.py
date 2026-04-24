@@ -89,3 +89,15 @@ COLOR_OK = "#A6E3A1"    # Green
 COLOR_WARN = "#F9E2AF"  # Yellow
 COLOR_ERR = "#F38BA8"   # Red
 COLOR_MUTED = "#6C7086" # Grey
+
+# ---------------------------------------------------------------------------
+# Halo PSA poller
+# ---------------------------------------------------------------------------
+HALO_BASE_URL = ""
+HALO_CLIENT_ID = ""
+HALO_CLIENT_SECRET = ""
+HALO_POLL_INTERVAL = 120        # seconds between Halo API polls
+STATUS_POLL_INTERVAL = 300      # seconds between external status page polls
+MONITOR_M365 = True
+MONITOR_AWS = True
+OUTAGE_DEVICE_KEYWORDS = "firewall,router,gateway,switch,network,offline,unreachable"

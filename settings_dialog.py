@@ -135,16 +135,36 @@ class SettingsDialog:
         self._text_field(inner, "Log file path", "log_file",
                          s.get("log_file", config.DEFAULT_LOG_FILE), **pad)
 
+        # ── Section: Halo PSA API ─────────────────────────────────────────
+        self._section(inner, "🔗  Halo PSA API")
+        self._text_field(inner, "Base URL (e.g. https://your.halopsa.com)",
+                         "halo_base_url", s.get("halo_base_url", ""), **pad)
+        self._text_field(inner, "Client ID", "halo_client_id",
+                         s.get("halo_client_id", ""), **pad)
+        self._text_field(inner, "Client secret", "halo_client_secret",
+                         s.get("halo_client_secret", ""), secret=True, **pad)
+        self._int_field(inner, "Ticket poll interval (seconds)", "halo_poll_interval",
+                        s.get("halo_poll_interval", 120), **pad)
+        self._text_field(inner, "Outage keywords (comma separated)",
+                         "outage_device_keywords",
+                         s.get("outage_device_keywords",
+                               "firewall,router,gateway,switch,network,offline,unreachable"),
+                         **pad)
+
+        # ── Section: External Status Pages ───────────────────────────────
+        self._section(inner, "🌍  External Status Pages")
+        self._bool_field(inner, "Monitor Microsoft 365 status",
+                         "monitor_m365", s.get("monitor_m365", True), **pad)
+        self._bool_field(inner, "Monitor AWS status",
+                         "monitor_aws", s.get("monitor_aws", True), **pad)
+        self._int_field(inner, "Status poll interval (seconds)", "status_poll_interval",
+                        s.get("status_poll_interval", 300), **pad)
+
         # ── Section: System ───────────────────────────────────────────────
         self._section(inner, "💻  System")
         import autostart
         self._bool_field(inner, "Start automatically with Windows",
                          "autostart_enabled", autostart.is_enabled(), **pad)
-
-        # ── Section: Integrations (future) ───────────────────────────────
-        # TODO: Add outbound integration settings here when needed.
-        # Example: Halo PSA write-back (create/update tickets on P1).
-        # See integrations/base.py for the BaseIntegration class to subclass.
 
         # ── Buttons ───────────────────────────────────────────────────────
         btn_row = tk.Frame(self._win, bg=config.DASH_BG)
@@ -274,7 +294,8 @@ class SettingsDialog:
             try:
                 val = var.get()
                 # Type coercions for integer fields
-                if key in ("port", "cooldown_seconds", "flash_interval_ms", "max_history"):
+                if key in ("port", "cooldown_seconds", "flash_interval_ms", "max_history",
+                           "halo_poll_interval", "status_poll_interval"):
                     val = int(val)
                 new_settings[key] = val
             except ValueError:

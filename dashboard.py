@@ -75,11 +75,12 @@ class Dashboard:
         r = self.root
         r.title(config.APP_TITLE)
         r.configure(bg=BG_SURFACE)
-        r.geometry("1100x760")
-        r.minsize(900, 600)
+        r.geometry("1400x760")
+        r.minsize(1100, 600)
         r.protocol("WM_DELETE_WINDOW", self._on_close)
 
         self._build_top_bar()
+        self._build_outage_banner()
         self._build_toolbar()
         self._build_cards_area()
         self._build_log_drawer()
@@ -91,6 +92,7 @@ class Dashboard:
         bar = tk.Frame(self.root, bg=BG_DEEP, height=54)
         bar.pack(fill=tk.X)
         bar.pack_propagate(False)
+        self._top_bar = bar
 
         # Brand
         brand = tk.Frame(bar, bg=BG_DEEP)
@@ -120,6 +122,48 @@ class Dashboard:
         self._pill_active.pack(side=tk.LEFT, padx=3)
         self._pill_queued = _Pill(pills, "Queued", "0", config.COLOR_MUTED)
         self._pill_queued.pack(side=tk.LEFT, padx=3)
+
+    # ── Outage banner ─────────────────────────────────────────────────────────
+
+    def _build_outage_banner(self) -> None:
+        """Amber strip that appears between top bar and toolbar when outages exist."""
+        self._outage_banner = tk.Frame(self.root, bg="#5C4000", height=28)
+        self._outage_banner.pack_propagate(False)
+        # Not packed yet — shown on demand after _top_bar
+        self._outage_lbl = tk.Label(
+            self._outage_banner, text="",
+            font=("Segoe UI", 9, "bold"), fg="#FFF3CD", bg="#5C4000",
+        )
+        self._outage_lbl.pack(side=tk.LEFT, padx=12)
+        self._outage_dismiss = tk.Label(
+            self._outage_banner, text="✕", font=("Segoe UI", 9),
+            fg="#FFF3CD", bg="#5C4000", cursor="hand2",
+        )
+        self._outage_dismiss.pack(side=tk.RIGHT, padx=12)
+        self._outage_dismiss.bind("<Button-1>", lambda e: self._hide_outage_banner())
+        self._outage_banner_visible = False
+
+    def _show_outage_banner(self, text: str) -> None:
+        self._outage_lbl.configure(text=text)
+        if not self._outage_banner_visible:
+            self._outage_banner.pack(fill=tk.X, after=self._top_bar)
+            self._outage_banner_visible = True
+
+    def _hide_outage_banner(self) -> None:
+        if self._outage_banner_visible:
+            self._outage_banner.pack_forget()
+            self._outage_banner_visible = False
+
+    def _refresh_outage_banner(self, outages: list) -> None:
+        active = [o for o in outages if not getattr(o, "resolved", False)]
+        if not active:
+            self._hide_outage_banner()
+            return
+        services = ", ".join(o.service for o in active[:3])
+        if len(active) > 3:
+            services += f" +{len(active) - 3} more"
+        label = f"⚠  {len(active)} ACTIVE OUTAGE{'S' if len(active) > 1 else ''}  —  {services}"
+        self._show_outage_banner(label)
 
     # ── Toolbar ───────────────────────────────────────────────────────────────
 
@@ -167,15 +211,25 @@ class Dashboard:
         area = tk.Frame(self.root, bg=BG_SURFACE)
         area.pack(fill=tk.BOTH, expand=True, padx=12, pady=(10, 0))
 
-        # Top row: Active Alert + Queue side by side
-        top_row = tk.Frame(area, bg=BG_SURFACE)
+        # Horizontal split: left (main) + right (Halo tickets)
+        split = tk.Frame(area, bg=BG_SURFACE)
+        split.pack(fill=tk.BOTH, expand=True)
+
+        # Right panel packed first so it doesn't steal expand space
+        self._build_halo_panel(split)
+
+        left = tk.Frame(split, bg=BG_SURFACE)
+        left.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Top row: Active Alert + P1 Queue side by side
+        top_row = tk.Frame(left, bg=BG_SURFACE)
         top_row.pack(fill=tk.BOTH, expand=False)
 
         self._build_active_card(top_row)
         self._build_queue_card(top_row)
 
-        # Bottom: History full width
-        self._build_history_card(area)
+        # Bottom: History full width (within left column)
+        self._build_history_card(left)
 
     def _build_active_card(self, parent) -> None:
         outer = _Card(parent, "ACTIVE ALERT", accent=ACCENT_RED)
@@ -199,6 +253,31 @@ class Dashboard:
             height=9, bd=0, highlightthickness=0,
         )
         self._queued_list.pack(fill=tk.BOTH, expand=True)
+
+    def _build_halo_panel(self, parent) -> None:
+        outer = _Card(parent, "HALO TICKET QUEUE", accent=ACCENT_BLUE)
+        outer.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False,
+                   padx=(6, 0), pady=(0, 8))
+        outer.configure(width=310)
+        outer.pack_propagate(False)
+
+        self._halo_count_lbl = tk.Label(
+            outer.header_frame, text="—",
+            font=FONT_LABEL, fg=config.COLOR_MUTED, bg=BG_CARD,
+        )
+        self._halo_count_lbl.pack(side=tk.RIGHT, padx=4)
+
+        inner = tk.Frame(outer.body, bg=BG_SURFACE)
+        inner.pack(fill=tk.BOTH, expand=True)
+        sb = tk.Scrollbar(inner, bg=BG_SURFACE, troughcolor=BG_SURFACE)
+        sb.pack(side=tk.RIGHT, fill=tk.Y)
+        self._halo_list = tk.Listbox(
+            inner, bg=BG_SURFACE, fg=config.DASH_FG,
+            font=FONT_MONO_SM, relief=tk.FLAT, selectbackground=BTN_MUTED,
+            yscrollcommand=sb.set, bd=0, highlightthickness=0,
+        )
+        self._halo_list.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        sb.config(command=self._halo_list.yview)
 
     def _build_history_card(self, parent) -> None:
         outer = _Card(parent, "HISTORY", accent=ACCENT_BLUE)
@@ -298,6 +377,7 @@ class Dashboard:
             self._schedule_poll()
 
     def _dispatch(self, msg) -> None:
+        from models import MSG_TICKET_UPDATE, MSG_OUTAGE_UPDATE
         kind, data = msg.kind, msg.data
         if kind == "alert":
             self._handle_new_alert(data)
@@ -310,6 +390,10 @@ class Dashboard:
         elif kind == "error":
             self._append_log(f"❌ ERROR: {data}")
             messagebox.showerror("Listener Error", str(data), parent=self.root)
+        elif kind == MSG_TICKET_UPDATE:
+            self._refresh_halo_tickets(data or [])
+        elif kind == MSG_OUTAGE_UPDATE:
+            self._refresh_outage_banner(data or [])
         else:
             log.debug(f"Unknown queue msg kind: {kind!r}")
 
@@ -568,6 +652,29 @@ class Dashboard:
                                config.COLOR_ERR if active else config.COLOR_MUTED)
         q = self.state.queue_count()
         self._pill_queued.set(str(q), config.COLOR_WARN if q else config.COLOR_MUTED)
+
+    def _refresh_halo_tickets(self, rows: list) -> None:
+        self._halo_list.delete(0, tk.END)
+        self._halo_count_lbl.configure(
+            text=f"{len(rows)} open" if rows else "0 open"
+        )
+        for r in rows:
+            if r.sla_remaining_minutes is None:
+                sla_str = "SLA:—   "
+            elif r.sla_remaining_minutes < 0:
+                sla_str = f"SLA:OVR "
+            else:
+                h, m = divmod(r.sla_remaining_minutes, 60)
+                sla_str = f"SLA:{h:02d}h{m:02d}"
+            pri = (r.priority or "")[:4].ljust(4)
+            client = (r.client or "")[:18].ljust(18)
+            subj = (r.subject or "")[:26]
+            self._halo_list.insert(tk.END, f" {sla_str}  {pri}  {client}  {subj}")
+            # Colour overdue rows
+            if r.sla_remaining_minutes is not None and r.sla_remaining_minutes < 0:
+                self._halo_list.itemconfig(tk.END, fg=config.COLOR_ERR)
+            elif r.sla_remaining_minutes is not None and r.sla_remaining_minutes < 60:
+                self._halo_list.itemconfig(tk.END, fg=config.COLOR_WARN)
 
     # ------------------------------------------------------------------ log
 

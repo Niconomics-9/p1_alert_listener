@@ -88,12 +88,38 @@ class Alert:
 
 
 # ---------------------------------------------------------------------------
+# Halo / status panel models
+# ---------------------------------------------------------------------------
+
+@dataclass
+class TicketRow:
+    ticket_id: int
+    client: str
+    subject: str
+    priority: str
+    sla_remaining_minutes: int | None  # None = SLA not set
+
+
+@dataclass
+class OutageEvent:
+    source: str        # "Halo" | "M365" | "AWS"
+    service: str       # e.g. "ClientName: Firewall", "Exchange Online"
+    summary: str       # 120 char max
+    detected_at: str   # utcnow isoformat
+    resolved: bool = False
+
+
+# ---------------------------------------------------------------------------
 # Queue message types passed from listener → GUI via queue.Queue
 # ---------------------------------------------------------------------------
+
+MSG_TICKET_UPDATE = "ticket_update"   # payload: list[TicketRow]
+MSG_OUTAGE_UPDATE = "outage_update"   # payload: list[OutageEvent]
+
 
 @dataclass
 class QueueMsg:
     """Lightweight message passed between threads."""
 
-    kind: str          # "alert" | "log" | "listener_status" | "error"
-    data: Any = None   # Alert, str, bool, etc.
+    kind: str          # "alert" | "log" | "listener_status" | "error" | MSG_*
+    data: Any = None   # Alert, str, bool, list[TicketRow], list[OutageEvent], …
