@@ -240,6 +240,7 @@ class Dashboard:
         self._menu_btn(inner, "⚙  Settings",         self._do_settings,         BTN_MUTED,               **pad)
         self._menu_btn(inner, "🔊  Test Sound",       self._do_test_sound,       BTN_MUTED,               **pad)
         self._menu_btn(inner, "📁  Open Logs",        self._do_open_logs,        BTN_MUTED,               **pad)
+        self._menu_btn(inner, "🌐  Status Board",     self._do_open_board,       BTN_MUTED,               **pad)
 
     def _menu_section(self, parent, title: str) -> None:
         tk.Label(parent, text=title, font=("Segoe UI", 7, "bold"),
@@ -628,6 +629,12 @@ class Dashboard:
             os.startfile(str(config.LOGS_DIR))
         except Exception as exc:
             messagebox.showinfo("Logs", f"{config.LOGS_DIR}\n\n{exc}", parent=self.root)
+
+    def _do_open_board(self) -> None:
+        import webbrowser
+        port = self.state.settings.get("port", config.DEFAULT_PORT)
+        webbrowser.open(f"http://127.0.0.1:{port}/board")
+        self._append_log("🌐 Status Board opened in browser")
 
     def _do_test_sound(self) -> None:
         s = self.state.settings

@@ -41,6 +41,10 @@ class AppState:
         self.ticket_queue: list = []    # list[TicketRow]
         self.active_outages: list = []  # list[OutageEvent]
 
+        # ── NOC board data (populated by ServicePollerThread) ─────────────
+        self.service_status: dict = {}  # {service_name: {status, cat, description, page, ...}}
+        self.isp_status: dict = {}      # {isp_name: {probe_status, manual_outage, color, ...}}
+
         # ── Sound ─────────────────────────────────────────────────────────
         self.sound_playing: bool = False
         self.sound_silenced: bool = False  # Silenced for current alert session

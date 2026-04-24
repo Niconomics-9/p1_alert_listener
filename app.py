@@ -29,6 +29,7 @@ import utils
 from dashboard import Dashboard
 from halo_poller import HaloPollerThread
 from listener import ListenerThread
+from service_poller import ServicePollerThread
 from state import AppState
 from status_poller import StatusPollerThread
 
@@ -105,6 +106,8 @@ def _start_listener(state: AppState) -> None:
     log.info("Halo poller thread started")
     StatusPollerThread(state).start()
     log.info("Status poller thread started")
+    ServicePollerThread(state).start()
+    log.info("Service poller thread started")
 
 
 def _shutdown(state: AppState) -> None:

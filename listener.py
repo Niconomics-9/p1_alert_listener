@@ -46,8 +46,11 @@ flask_log.setLevel(logging.ERROR)
 
 def create_flask_app(app_state) -> Flask:
     """Build and return the Flask application."""
+    from board import create_board_blueprint
+
     flask_app = Flask("p1alert_listener")
     flask_app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH
+    flask_app.register_blueprint(create_board_blueprint(app_state))
 
     # ── /health ──────────────────────────────────────────────────────────────
 
